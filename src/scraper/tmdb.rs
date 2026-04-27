@@ -3,6 +3,7 @@ use crate::models::media::{MediaType, ParsedInfo, ScrapeResult, ScrapeSource};
 use reqwest::Client;
 use serde::Deserialize;
 
+#[derive(Clone)]
 pub struct TmdbScraper {
     client: Client,
     api_key: String,

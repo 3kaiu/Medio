@@ -203,6 +203,16 @@ impl Organizer {
     pub fn execute(&self, plans: &[OrganizePlan], dry_run: bool) -> Vec<String> {
         let mut actions = Vec::new();
 
+        // Reuse HTTP client for all image downloads
+        let img_client = if plans.iter().any(|p| !p.image_urls.is_empty()) {
+            reqwest::blocking::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .ok()
+        } else {
+            None
+        };
+
         for plan in plans {
             // Create target directory
             if let Some(parent) = plan.target.parent() {
@@ -265,20 +275,13 @@ impl Organizer {
 
                 if dry_run {
                     actions.push(format!("[dry-run] download {img_name} from {url}"));
-                } else {
-                    // Download image synchronously via minreq-style approach
-                    // Use a simple sync HTTP GET for image download
-                    let client = reqwest::blocking::Client::builder()
-                        .timeout(std::time::Duration::from_secs(30))
-                        .build();
-                    if let Ok(client) = client {
-                        if let Ok(resp) = client.get(url).send() {
-                            if let Ok(bytes) = resp.bytes() {
-                                if let Err(e) = std::fs::write(&img_path, &bytes) {
-                                    actions.push(format!("[error] write image {}: {e}", img_path.display()));
-                                } else {
-                                    actions.push(format!("[image] {}", img_path.display()));
-                                }
+                } else if let Some(ref client) = img_client {
+                    if let Ok(resp) = client.get(url).send() {
+                        if let Ok(bytes) = resp.bytes() {
+                            if let Err(e) = std::fs::write(&img_path, &bytes) {
+                                actions.push(format!("[error] write image {}: {e}", img_path.display()));
+                            } else {
+                                actions.push(format!("[image] {}", img_path.display()));
                             }
                         }
                     }

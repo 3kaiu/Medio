@@ -1,25 +1,30 @@
+use once_cell::sync::Lazy;
+use regex::Regex;
+
 /// Keyword filter — strips noise words from filenames before identification
 pub struct KeywordFilter {
-    keywords: Vec<String>,
+    patterns: Vec<Regex>,
 }
 
 impl KeywordFilter {
     pub fn new(keywords: Vec<String>) -> Self {
         let mut all = keywords;
         all.extend(Self::builtin_keywords());
-        Self { keywords: all }
+        let patterns = all.iter()
+            .filter_map(|kw| Regex::new(&format!("(?i){}", regex::escape(kw))).ok())
+            .collect();
+        Self { patterns }
     }
 
     /// Filter noise keywords from filename, return cleaned string
     pub fn filter(&self, filename: &str) -> String {
         let mut result = filename.to_string();
-        for kw in &self.keywords {
-            let pattern = regex::Regex::new(&format!("(?i){}", regex::escape(kw))).unwrap();
+        for pattern in &self.patterns {
             result = pattern.replace_all(&result, " ").to_string();
         }
         // Collapse multiple spaces
-        let collapse = regex::Regex::new(r"\s+").unwrap();
-        collapse.replace_all(&result, " ").trim().to_string()
+        static COLLAPSE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s+").unwrap());
+        COLLAPSE.replace_all(&result, " ").trim().to_string()
     }
 
     /// Built-in common release group / source tags

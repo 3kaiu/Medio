@@ -53,6 +53,8 @@ impl Renamer {
     }
 
     fn render_template(&self, template: &str, item: &MediaItem) -> Option<String> {
+        use once_cell::sync::Lazy;
+
         let mut ctx = HashMap::new();
 
         // From parsed info
@@ -83,28 +85,37 @@ impl Renamer {
             result = result.replace(&format!("{{{{{key}}}}}"), value);
         }
 
+        // Pre-compiled cleanup regexes
+        static RE_UNRESOLVED: Lazy<regex::Regex> = Lazy::new(|| regex::Regex::new(r"\{\{[^}]+\}\}").unwrap());
+        static RE_EMPTY_PAREN: Lazy<regex::Regex> = Lazy::new(|| regex::Regex::new(r"\(\s*\)").unwrap());
+        static RE_EMPTY_BRACKET: Lazy<regex::Regex> = Lazy::new(|| regex::Regex::new(r"\[\s*\]").unwrap());
+        static RE_MULTI_SPACE: Lazy<regex::Regex> = Lazy::new(|| regex::Regex::new(r"  +").unwrap());
+        static RE_DASH_NORMALIZE: Lazy<regex::Regex> = Lazy::new(|| regex::Regex::new(r"\s+-\s+").unwrap());
+        static RE_DASH_TRAIL: Lazy<regex::Regex> = Lazy::new(|| regex::Regex::new(r"\s+-\s*$").unwrap());
+        static RE_DASH_LEAD: Lazy<regex::Regex> = Lazy::new(|| regex::Regex::new(r"^\s*-\s+").unwrap());
+        static RE_TRAIL_JUNK: Lazy<regex::Regex> = Lazy::new(|| regex::Regex::new(r"[\s.]+$").unwrap());
+        static RE_LEAD_JUNK: Lazy<regex::Regex> = Lazy::new(|| regex::Regex::new(r"^[\s.]+").unwrap());
+
         // Clean up unresolved placeholders
-        result = regex::Regex::new(r"\{\{[^}]+\}\}").ok()?.replace_all(&result, "").to_string();
+        result = RE_UNRESOLVED.replace_all(&result, "").to_string();
 
         // Clean up empty parentheses, dangling separators
-        result = regex::Regex::new(r"\(\s*\)").ok()?.replace_all(&result, "").to_string();
-        result = regex::Regex::new(r"\[\s*\]").ok()?.replace_all(&result, "").to_string();
+        result = RE_EMPTY_PAREN.replace_all(&result, "").to_string();
+        result = RE_EMPTY_BRACKET.replace_all(&result, "").to_string();
         // Collapse multiple spaces
-        result = regex::Regex::new(r"  +").ok()?.replace_all(&result, " ").to_string();
+        result = RE_MULTI_SPACE.replace_all(&result, " ").to_string();
         // Remove " - " when surrounded by empty/whitespace, or at edges
         for _ in 0..3 {
-            result = regex::Regex::new(r"\s+-\s+").ok()?.replace_all(&result, " - ").to_string();
-            result = regex::Regex::new(r"\s+-\s*$").ok()?.replace_all(&result, "").to_string();
-            result = regex::Regex::new(r"^\s*-\s+").ok()?.replace_all(&result, "").to_string();
-            result = regex::Regex::new(r"  +").ok()?.replace_all(&result, " ").to_string();
+            result = RE_DASH_NORMALIZE.replace_all(&result, " - ").to_string();
+            result = RE_DASH_TRAIL.replace_all(&result, "").to_string();
+            result = RE_DASH_LEAD.replace_all(&result, "").to_string();
+            result = RE_MULTI_SPACE.replace_all(&result, " ").to_string();
         }
 
         // Clean up double dots, trailing/leading dots/spaces
         result = result.replace("..", ".").trim().to_string();
-        let re = regex::Regex::new(r"[\s.]+$").ok()?;
-        result = re.replace_all(&result, "").to_string();
-        let re2 = regex::Regex::new(r"^[\s.]+").ok()?;
-        result = re2.replace_all(&result, "").to_string();
+        result = RE_TRAIL_JUNK.replace_all(&result, "").to_string();
+        result = RE_LEAD_JUNK.replace_all(&result, "").to_string();
 
         if result.is_empty() {
             None

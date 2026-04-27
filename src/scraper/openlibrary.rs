@@ -2,6 +2,7 @@ use crate::models::media::{ScrapeResult, ScrapeSource};
 use reqwest::Client;
 use serde::Deserialize;
 
+#[derive(Clone)]
 pub struct OpenLibraryScraper {
     client: Client,
     base_url: String,

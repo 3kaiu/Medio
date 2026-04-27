@@ -136,12 +136,12 @@ impl Identifier {
                 Regex::new(r"(?i)-[A-Za-z0-9]+$").unwrap(),
             ]
         });
+        static COLLAPSE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s+").unwrap());
 
         for re in TAGS.iter() {
             title = re.replace_all(&title, " ").to_string();
         }
-        let collapse = Regex::new(r"\s+").unwrap();
-        title = collapse.replace_all(&title, " ").trim().to_string();
+        title = COLLAPSE.replace_all(&title, " ").trim().to_string();
 
         let media_suffix = extract_media_suffix(cleaned, 0);
 
@@ -163,10 +163,10 @@ impl Identifier {
 // --- Helper extraction functions ---
 
 fn clean_title(s: &str) -> String {
+    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s+").unwrap());
     let s = s.trim();
     let s = s.trim_end_matches(|c: char| c == '.' || c == '-' || c == '_' || c == ' ');
-    let re = Regex::new(r"\s+").unwrap();
-    re.replace_all(s, " ").to_string()
+    RE.replace_all(s, " ").to_string()
 }
 
 fn extract_year(s: &str) -> Option<u16> {
