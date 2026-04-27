@@ -5,6 +5,7 @@ use crate::core::hasher::FileHasher;
 use crate::core::identifier::Identifier;
 use crate::core::keyword_filter::KeywordFilter;
 use crate::core::scanner::Scanner;
+use crate::db::cache::Cache;
 use crate::media::ffprobe::FfprobeProbe;
 use crate::media::native_probe::NativeProbe;
 use crate::media::probe::MediaProbe;
@@ -54,7 +55,11 @@ pub fn run(path: &str, config: &AppConfig, json_output: bool) {
     }
 
     // Step 3: Hash
-    FileHasher::compute_all(&mut items);
+    let cache = Cache::open(&config.cache_path()).ok();
+    if let Some(ref cache) = cache {
+        let _ = cache.cleanup(config.cache.ttl_days);
+    }
+    FileHasher::compute_all_with_cache(&mut items, cache.as_ref());
 
     // Step 4: Probe quality
     {

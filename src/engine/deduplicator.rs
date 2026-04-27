@@ -99,7 +99,11 @@ impl Deduplicator {
                     match self.config.duplicate_action {
                         crate::core::types::DupAction::Trash => {
                             match trash::delete(path) {
-                                Ok(()) => actions.push(format!("[trash] {action_desc}")),
+                                Ok(()) => {
+                                    let msg = format!("[trash] {action_desc}");
+                                    crate::core::oplog::log(&msg);
+                                    actions.push(msg);
+                                }
                                 Err(e) => actions.push(format!("[error] failed to trash {}: {e}", path.display())),
                             }
                         }
@@ -109,7 +113,11 @@ impl Deduplicator {
                             } else {
                                 let dest = self.config.move_target.join(path.file_name().unwrap_or_default());
                                 match std::fs::rename(path, &dest) {
-                                    Ok(()) => actions.push(format!("[move] {} → {}", path.display(), dest.display())),
+                                    Ok(()) => {
+                                        let msg = format!("[move] {} → {}", path.display(), dest.display());
+                                        crate::core::oplog::log(&msg);
+                                        actions.push(msg);
+                                    }
                                     Err(e) => actions.push(format!("[error] failed to move {}: {e}", path.display())),
                                 }
                             }
@@ -144,8 +152,15 @@ impl Deduplicator {
                 dup_items.iter().enumerate().max_by(|a, b| a.1.quality_score.partial_cmp(&b.1.quality_score).unwrap()).map(|(i, _)| i)
             }
             KeepStrategy::Newest => {
-                // Sort by file modified time — use path as proxy for now
-                Some(0)
+                dup_items
+                    .iter()
+                    .enumerate()
+                    .max_by_key(|(_, d)| {
+                        std::fs::metadata(&items[d.index].path)
+                            .and_then(|meta| meta.modified())
+                            .ok()
+                    })
+                    .map(|(i, _)| i)
             }
             KeepStrategy::Largest => {
                 dup_items.iter().enumerate().max_by_key(|(_, d)| items[d.index].file_size).map(|(i, _)| i)
@@ -161,5 +176,66 @@ impl Deduplicator {
             content_id: content_id.to_string(),
             items: dup_items,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::config::DedupConfig;
+    use crate::core::types::{DupAction, KeepStrategy};
+    use crate::models::media::{MediaItem, MediaType};
+    use std::io::Write;
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    fn make_item(path: PathBuf, full_hash: u64) -> MediaItem {
+        MediaItem {
+            id: 0,
+            path,
+            file_size: 1024,
+            media_type: MediaType::Movie,
+            extension: "mkv".into(),
+            parsed: None,
+            quality: None,
+            scraped: None,
+            hash: Some(HashInfo {
+                size_hash: full_hash,
+                prefix_hash: Some(full_hash),
+                full_hash: Some(full_hash),
+            }),
+            rename_plan: None,
+        }
+    }
+
+    #[test]
+    fn test_keep_strategy_newest_prefers_newer_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let older_path = dir.path().join("older.mkv");
+        let newer_path = dir.path().join("newer.mkv");
+
+        let mut older = std::fs::File::create(&older_path).unwrap();
+        writeln!(older, "older").unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        let mut newer = std::fs::File::create(&newer_path).unwrap();
+        writeln!(newer, "newer").unwrap();
+
+        let items = vec![make_item(older_path, 42), make_item(newer_path, 42)];
+        let deduplicator = Deduplicator::new(DedupConfig {
+            hash_algorithm: "xxhash".into(),
+            keep_strategy: KeepStrategy::Newest,
+            duplicate_action: DupAction::Report,
+            move_target: PathBuf::new(),
+        });
+
+        let groups = deduplicator.analyze(&items);
+        assert_eq!(groups.len(), 1);
+        let keep_index = groups[0]
+            .items
+            .iter()
+            .find(|item| item.is_keep)
+            .map(|item| item.index)
+            .unwrap();
+        assert_eq!(items[keep_index].path.file_name().unwrap(), "newer.mkv");
     }
 }

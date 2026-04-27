@@ -58,7 +58,7 @@ impl Organizer {
             };
 
             // NFO content
-            let nfo_content = if self.config.with_nfo || self.config.with_images {
+            let nfo_content = if self.config.with_nfo {
                 self.generate_nfo(item)
             } else {
                 None
@@ -250,7 +250,11 @@ impl Organizer {
                     }
                 };
                 match result {
-                    Ok(()) => actions.push(format!("[{action_label}] {} → {}", plan.source.display(), plan.target.display())),
+                    Ok(()) => {
+                        let msg = format!("[{action_label}] {} → {}", plan.source.display(), plan.target.display());
+                        crate::core::oplog::log(&msg);
+                        actions.push(msg);
+                    }
                     Err(e) => actions.push(format!("[error] {} → {}: {e}", plan.source.display(), plan.target.display())),
                 }
             }
@@ -475,5 +479,16 @@ mod tests {
         let nfo = plans[0].nfo_content.as_ref().unwrap();
         assert!(nfo.contains("<movie>"));
         assert!(nfo.contains("<title>Inception</title>"));
+    }
+
+    #[test]
+    fn test_images_do_not_force_nfo_generation() {
+        let mut config = make_org_config();
+        config.with_images = true;
+        let organizer = Organizer::new(config);
+        let item = make_movie_item("Inception");
+        let plans = organizer.plan(&[item], OrganizeMode::Archive, LinkMode::None);
+        assert!(!plans.is_empty());
+        assert!(plans[0].nfo_content.is_none());
     }
 }

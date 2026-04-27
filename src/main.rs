@@ -27,6 +27,8 @@ fn main() {
         AppConfig::default()
     });
 
+    core::oplog::init(config.general.operation_log);
+
     match cli.command {
         Commands::Scan { path } => {
             cli::commands::scan::run(&path, &config, cli.json);
@@ -72,6 +74,7 @@ fn main() {
                     println!("  AI enabled: {}", config.ai.enabled);
                     println!("  Organize mode: {:?}", config.organize.mode);
                     println!("  Dry run: {}", config.general.dry_run);
+                    println!("  Operation log: {}", config.general.operation_log);
                 }
             }
         }

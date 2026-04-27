@@ -5,10 +5,8 @@ use crate::core::keyword_filter::KeywordFilter;
 use crate::core::scanner::Scanner;
 use crate::core::types::{LinkMode, OrganizeMode};
 use crate::engine::organizer::Organizer;
-use crate::scraper::local;
-use crate::scraper::musicbrainz::MusicBrainzScraper;
-use crate::scraper::openlibrary::OpenLibraryScraper;
-use crate::scraper::tmdb::TmdbScraper;
+use crate::engine::renamer::Renamer;
+use crate::scraper;
 use std::path::Path;
 
 pub fn run(path: &str, config: &AppConfig, mode: &str, with_nfo: bool, with_images: bool, link: &str, dry_run: bool, json_output: bool) {
@@ -63,54 +61,46 @@ pub fn run(path: &str, config: &AppConfig, mode: &str, with_nfo: bool, with_imag
     }
 
     // Step 2: Scrape metadata for better organization
-    let tmdb = TmdbScraper::new(&config.api);
-    let mb = MusicBrainzScraper::new(&config.api);
-    let ol = OpenLibraryScraper::new();
-
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
-        for item in items.iter_mut() {
-            // Try local NFO first
-            if let Some(nfo_path) = local::find_nfo(&item.path) {
-                if let Some(result) = local::read_nfo(&nfo_path) {
-                    item.scraped = Some(result);
-                    continue;
-                }
-            }
+        scraper::populate_scrape_results(&mut items, config).await;
+    });
 
-            let result = match item.media_type {
-                crate::models::media::MediaType::Movie | crate::models::media::MediaType::TvShow => {
-                    if let Some(parsed) = &item.parsed {
-                        tmdb.scrape(parsed, &item.media_type).await.ok().flatten()
-                    } else {
-                        None
-                    }
-                }
-                crate::models::media::MediaType::Music => {
-                    if let Some(parsed) = &item.parsed {
-                        mb.search_recording(
-                            parsed.raw_title.split('.').next().unwrap_or(&parsed.raw_title),
-                            &parsed.raw_title,
-                        ).await.ok().flatten()
-                    } else {
-                        None
-                    }
-                }
-                crate::models::media::MediaType::Novel => {
-                    if let Some(parsed) = &item.parsed {
-                        ol.search(&parsed.raw_title, None).await.ok().flatten()
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            };
+    if organize_mode == OrganizeMode::Rename {
+        let renamer = Renamer::new(config.rename.clone());
+        let plans = renamer.plan(&items);
 
-            if result.is_some() {
-                item.scraped = result;
+        if plans.is_empty() {
+            println!("No files need renaming.");
+            return;
+        }
+
+        if json_output {
+            let json = serde_json::to_string_pretty(&plans)
+                .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"));
+            println!("{json}");
+        } else {
+            print_rename_table(&plans);
+        }
+
+        let is_dry = dry_run || config.general.dry_run;
+        if !is_dry && config.general.confirm {
+            println!("\n{} files will be renamed. Proceed? [y/N]", plans.len());
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input).ok();
+            if input.trim().to_lowercase() != "y" {
+                println!("Aborted.");
+                return;
             }
         }
-    });
+
+        let actions = renamer.execute(&plans, is_dry);
+        for action in &actions {
+            println!("{action}");
+        }
+        println!("\n{} rename plans generated, {} actions taken.", plans.len(), actions.len());
+        return;
+    }
 
     // Step 3: Generate organize plans
     let organizer = Organizer::new(org_config);
@@ -137,8 +127,17 @@ pub fn run(path: &str, config: &AppConfig, mode: &str, with_nfo: bool, with_imag
 
     // Step 4: Execute
     let is_dry = dry_run || config.general.dry_run;
-    let actions = organizer.execute(&plans, is_dry);
+    if !is_dry && config.general.confirm {
+        println!("\n{} organize actions will be applied. Proceed? [y/N]", plans.len());
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).ok();
+        if input.trim().to_lowercase() != "y" {
+            println!("Aborted.");
+            return;
+        }
+    }
 
+    let actions = organizer.execute(&plans, is_dry);
     for action in &actions {
         println!("{action}");
     }
@@ -193,5 +192,28 @@ fn truncate(s: &str, max: usize) -> String {
     } else {
         let truncated: String = s.chars().take(max - 1).collect();
         format!("{truncated}…")
+    }
+}
+
+fn print_rename_table(plans: &[crate::models::media::RenamePlan]) {
+    use console::style;
+
+    println!(
+        "{}  {}  {}",
+        style("Old").bold().cyan().dim(),
+        style("→").bold().yellow().dim(),
+        style("New").bold().green().dim(),
+    );
+
+    for plan in plans {
+        let old_name = plan.old_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let new_name = plan.new_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        println!("  {} → {}", truncate(&old_name, 50), truncate(&new_name, 50));
+
+        for sub in &plan.subtitle_plans {
+            let sub_old = sub.old_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let sub_new = sub.new_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            println!("  {} → {}  (subtitle)", truncate(&sub_old, 48), truncate(&sub_new, 48));
+        }
     }
 }

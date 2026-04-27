@@ -4,6 +4,7 @@ use crate::core::identifier::Identifier;
 use crate::core::keyword_filter::KeywordFilter;
 use crate::core::scanner::Scanner;
 use crate::engine::renamer::Renamer;
+use crate::scraper;
 use std::path::Path;
 
 pub fn run(path: &str, config: &AppConfig, dry_run: bool, json_output: bool) {
@@ -34,7 +35,13 @@ pub fn run(path: &str, config: &AppConfig, dry_run: bool, json_output: bool) {
         }
     }
 
-    // Step 2: Generate rename plans
+    // Step 2: Scrape metadata so renaming can use authoritative titles
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        scraper::populate_scrape_results(&mut items, config).await;
+    });
+
+    // Step 3: Generate rename plans
     let renamer = Renamer::new(config.rename.clone());
     let plans = renamer.plan(&items);
 
@@ -51,27 +58,24 @@ pub fn run(path: &str, config: &AppConfig, dry_run: bool, json_output: bool) {
         print_rename_table(&plans);
     }
 
-    // Step 3: Execute or preview
+    // Step 4: Execute or preview
     let is_dry = dry_run || config.general.dry_run;
-    let actions = renamer.execute(&plans, is_dry);
 
     if !is_dry && config.general.confirm {
-        println!("\n{} files will be renamed. Proceed? [y/N]", plans.len());
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input).ok();
-        if input.trim().to_lowercase() != "y" {
+        if !dialoguer::Confirm::new()
+            .with_prompt(format!("{} files will be renamed. Proceed?", plans.len()))
+            .default(false)
+            .interact()
+            .unwrap_or(false)
+        {
             println!("Aborted.");
             return;
         }
-        // Re-execute with dry_run=false
-        let actions = renamer.execute(&plans, false);
-        for action in &actions {
-            println!("{action}");
-        }
-    } else {
-        for action in &actions {
-            println!("{action}");
-        }
+    }
+
+    let actions = renamer.execute(&plans, is_dry);
+    for action in &actions {
+        println!("{action}");
     }
 
     println!("\n{} rename plans generated, {} actions taken.", plans.len(), actions.len());

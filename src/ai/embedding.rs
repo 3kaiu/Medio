@@ -1,11 +1,10 @@
-#[allow(dead_code)]
 use crate::core::config::AiConfig;
 use crate::models::media::ScrapeResult;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 /// Embedding client for re-ranking scrape candidates
-#[allow(dead_code)]
+#[derive(Clone)]
 pub struct EmbeddingClient {
     client: Client,
     url: String,
@@ -108,8 +107,7 @@ impl EmbeddingClient {
     }
 }
 
-#[allow(dead_code)]
-fn cosine_similarity(a: &[f64], b: &[f64]) -> f64 {
+pub fn cosine_similarity(a: &[f64], b: &[f64]) -> f64 {
     if a.len() != b.len() || a.is_empty() {
         return 0.0;
     }

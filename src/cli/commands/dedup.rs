@@ -4,6 +4,7 @@ use crate::core::hasher::FileHasher;
 use crate::core::identifier::Identifier;
 use crate::core::keyword_filter::KeywordFilter;
 use crate::core::scanner::Scanner;
+use crate::db::cache::Cache;
 use crate::engine::deduplicator::Deduplicator;
 use crate::media::ffprobe::FfprobeProbe;
 use crate::media::native_probe::NativeProbe;
@@ -45,7 +46,11 @@ pub fn run(path: &str, config: &AppConfig, dry_run: bool, json_output: bool) {
 
     // Step 4: Hash
     println!("Computing hashes...");
-    FileHasher::compute_all(&mut items);
+    let cache = Cache::open(&config.cache_path()).ok();
+    if let Some(ref cache) = cache {
+        let _ = cache.cleanup(config.cache.ttl_days);
+    }
+    FileHasher::compute_all_with_cache(&mut items, cache.as_ref());
 
     // Step 5: Probe quality
     println!("Probing media quality...");
@@ -78,11 +83,12 @@ pub fn run(path: &str, config: &AppConfig, dry_run: bool, json_output: bool) {
 
     // Step 7: Execute or preview
     let is_dry = dry_run || config.general.dry_run;
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let actions = rt.block_on(deduplicator.execute(&groups, &items, is_dry)).unwrap_or_else(|e| vec![format!("Error: {e}")]);
-
     if !is_dry && config.general.confirm {
-        println!("\n{} duplicate files will be removed. Proceed? [y/N]", actions.len());
+        let pending_actions = groups
+            .iter()
+            .map(|group| group.items.iter().filter(|item| !item.is_keep).count())
+            .sum::<usize>();
+        println!("\n{} duplicate files will be removed. Proceed? [y/N]", pending_actions);
         let mut input = String::new();
         std::io::stdin().read_line(&mut input).ok();
         if input.trim().to_lowercase() != "y" {
@@ -90,6 +96,9 @@ pub fn run(path: &str, config: &AppConfig, dry_run: bool, json_output: bool) {
             return;
         }
     }
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let actions = rt.block_on(deduplicator.execute(&groups, &items, is_dry)).unwrap_or_else(|e| vec![format!("Error: {e}")]);
 
     for action in &actions {
         println!("{action}");

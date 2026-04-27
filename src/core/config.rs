@@ -33,6 +33,8 @@ pub struct GeneralConfig {
 
     #[serde(default = "default_true")]
     pub confirm: bool,
+    #[serde(default = "default_true")]
+    pub operation_log: bool,
     #[serde(default = "default_log_level")]
     pub log_level: String,
 }
@@ -250,7 +252,14 @@ fn default_audio_weight() -> f64 { 0.1 }
 fn default_ttl() -> u64 { 90 }
 
 impl Default for GeneralConfig {
-    fn default() -> Self { Self { dry_run: true, confirm: true, log_level: default_log_level() } }
+    fn default() -> Self {
+        Self {
+            dry_run: true,
+            confirm: true,
+            operation_log: true,
+            log_level: default_log_level(),
+        }
+    }
 }
 impl Default for ScanConfig {
     fn default() -> Self {

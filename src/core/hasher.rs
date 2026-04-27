@@ -1,3 +1,4 @@
+use crate::db::cache::Cache;
 use crate::models::media::{HashInfo, MediaItem};
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -28,15 +29,32 @@ impl FileHasher {
         paths.par_iter().map(|p| Self::hash_full(p)).collect()
     }
 
-    /// Compute progressive hashes for all items, updating HashInfo
-    pub fn compute_all(items: &mut [MediaItem]) {
+    pub fn compute_all_with_cache(items: &mut [MediaItem], cache: Option<&Cache>) {
+        if let Some(cache) = cache {
+            for item in items.iter_mut() {
+                let cache_key = Self::cache_key_for_item(item);
+                if let Some(hash) = cache.get_hash(&cache_key) {
+                    item.hash = Some(hash);
+                }
+            }
+        }
+
         let groups = Self::group_by_size(items);
 
         let mut prefix_results: HashMap<usize, u64> = HashMap::new();
         for group in &groups {
-            let paths: Vec<&Path> = group.iter().map(|&i| items[i].path.as_path()).collect();
+            let unresolved: Vec<usize> = group
+                .iter()
+                .copied()
+                .filter(|&i| items[i].hash.as_ref().and_then(|h| h.prefix_hash).is_none())
+                .collect();
+            if unresolved.is_empty() {
+                continue;
+            }
+
+            let paths: Vec<&Path> = unresolved.iter().map(|&i| items[i].path.as_path()).collect();
             let hashes = Self::prefix_hash(&paths);
-            for (j, &idx) in group.iter().enumerate() {
+            for (j, &idx) in unresolved.iter().enumerate() {
                 if let Some(h) = hashes[j] {
                     prefix_results.insert(idx, h);
                 }
@@ -47,12 +65,20 @@ impl FileHasher {
         for group in &groups {
             let mut prefix_groups: HashMap<u64, Vec<usize>> = HashMap::new();
             for &idx in group {
-                if let Some(h) = prefix_results.get(&idx) {
-                    prefix_groups.entry(*h).or_default().push(idx);
+                let prefix_hash = items[idx]
+                    .hash
+                    .as_ref()
+                    .and_then(|h| h.prefix_hash)
+                    .or_else(|| prefix_results.get(&idx).copied());
+                if let Some(h) = prefix_hash {
+                    prefix_groups.entry(h).or_default().push(idx);
                 }
             }
             for (_, same_prefix) in prefix_groups {
-                if same_prefix.len() >= 2 {
+                let missing_full = same_prefix
+                    .iter()
+                    .any(|&idx| items[idx].hash.as_ref().and_then(|h| h.full_hash).is_none());
+                if same_prefix.len() >= 2 && missing_full {
                     need_full.push(same_prefix);
                 }
             }
@@ -60,9 +86,18 @@ impl FileHasher {
 
         let mut full_results: HashMap<usize, u64> = HashMap::new();
         for group in &need_full {
-            let paths: Vec<&Path> = group.iter().map(|&i| items[i].path.as_path()).collect();
+            let unresolved: Vec<usize> = group
+                .iter()
+                .copied()
+                .filter(|&i| items[i].hash.as_ref().and_then(|h| h.full_hash).is_none())
+                .collect();
+            if unresolved.is_empty() {
+                continue;
+            }
+
+            let paths: Vec<&Path> = unresolved.iter().map(|&i| items[i].path.as_path()).collect();
             let hashes = Self::hash_full_batch(&paths);
-            for (j, &idx) in group.iter().enumerate() {
+            for (j, &idx) in unresolved.iter().enumerate() {
                 if let Some(h) = hashes[j] {
                     full_results.insert(idx, h);
                 }
@@ -71,12 +106,29 @@ impl FileHasher {
 
         for (i, item) in items.iter_mut().enumerate() {
             let size_hash = item.file_size;
-            let prefix_hash = prefix_results.get(&i).copied();
-            let full_hash = full_results.get(&i).copied();
+            let prefix_hash = item
+                .hash
+                .as_ref()
+                .and_then(|h| h.prefix_hash)
+                .or_else(|| prefix_results.get(&i).copied());
+            let full_hash = item
+                .hash
+                .as_ref()
+                .and_then(|h| h.full_hash)
+                .or_else(|| full_results.get(&i).copied());
 
             if prefix_hash.is_some() || full_hash.is_some() {
-                item.hash = Some(HashInfo { size_hash, prefix_hash, full_hash });
+                let hash_info = HashInfo { size_hash, prefix_hash, full_hash };
+                if let Some(cache) = cache {
+                    let cache_key = Self::cache_key_for_item(item);
+                    let _ = cache.set_hash(&cache_key, &hash_info);
+                }
+                item.hash = Some(hash_info);
             }
+        }
+
+        if let Some(cache) = cache {
+            let _ = cache.flush();
         }
     }
 
@@ -106,5 +158,58 @@ impl FileHasher {
 
     fn hash_full_batch(paths: &[&Path]) -> Vec<Option<u64>> {
         paths.par_iter().map(|p| Self::hash_full(p)).collect()
+    }
+
+    fn cache_key_for_item(item: &MediaItem) -> String {
+        let modified = std::fs::metadata(&item.path)
+            .and_then(|meta| meta.modified())
+            .ok()
+            .and_then(|ts| ts.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        format!("{}:{}:{}", item.path.display(), item.file_size, modified)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn make_item(path: &Path) -> MediaItem {
+        let size = std::fs::metadata(path).unwrap().len();
+        MediaItem {
+            id: 0,
+            path: path.to_path_buf(),
+            file_size: size,
+            media_type: crate::models::media::MediaType::Movie,
+            extension: path.extension().unwrap_or_default().to_string_lossy().to_string(),
+            parsed: None,
+            quality: None,
+            scraped: None,
+            hash: None,
+            rename_plan: None,
+        }
+    }
+
+    #[test]
+    fn test_compute_all_uses_cached_hashes() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(&dir.path().join("cache.sled")).unwrap();
+        let file_a = dir.path().join("a.mkv");
+        let file_b = dir.path().join("b.mkv");
+        let mut a = std::fs::File::create(&file_a).unwrap();
+        let mut b = std::fs::File::create(&file_b).unwrap();
+        writeln!(a, "same-content").unwrap();
+        writeln!(b, "same-content").unwrap();
+
+        let mut items = vec![make_item(&file_a), make_item(&file_b)];
+        FileHasher::compute_all_with_cache(&mut items, Some(&cache));
+        let first_hash = items[0].hash.clone().unwrap();
+
+        let mut items_again = vec![make_item(&file_a), make_item(&file_b)];
+        FileHasher::compute_all_with_cache(&mut items_again, Some(&cache));
+        assert_eq!(items_again[0].hash.as_ref().unwrap().full_hash, first_hash.full_hash);
+        assert_eq!(items_again[1].hash.as_ref().unwrap().full_hash, first_hash.full_hash);
     }
 }

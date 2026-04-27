@@ -1357,6 +1357,7 @@ dependencies = [
  "futures",
  "ignore",
  "indicatif",
+ "lazy_static",
  "matroska-demuxer",
  "mp4parse",
  "once_cell",

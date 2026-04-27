@@ -77,6 +77,20 @@ pub fn run_init(config_path: &PathBuf) {
         config.organize.root = std::path::PathBuf::from(&root);
     }
 
+    // Operation log
+    println!();
+    println!("5. Operation log");
+    println!("   Record file operations to a local log file");
+    let op_log = prompt_input(&format!(
+        "   Enable operation log? [Y/n] (current: {}): ",
+        if config.general.operation_log { "on" } else { "off" }
+    ));
+    match op_log.to_lowercase().as_str() {
+        "" | "y" | "yes" => config.general.operation_log = true,
+        "n" | "no" => config.general.operation_log = false,
+        _ => {}
+    }
+
     // Save
     println!();
     match config.save() {

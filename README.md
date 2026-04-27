@@ -19,7 +19,7 @@ All-in-one media toolkit: FileBot + TinyMediaManager + dupeGuru in a single bina
 
 - **Scan** — Recursive media file discovery with smart identification (movie/TV/music/book/STRM)
 - **Dedup** — Progressive xxHash deduplication with quality-aware keep strategy
-- **Scrape** — Metadata from TMDB, MusicBrainz, OpenLibrary, local NFO, and AI
+- **Scrape** — Metadata from local NFO, TMDB, MusicBrainz, OpenLibrary, AI, and parsed fallback
 - **Rename** — Template-based renaming with subtitle file tracking
 - **Analyze** — Single-file deep analysis (hash, quality probe, scrape, AI)
 - **Organize** — Archive/local/rename modes with NFO generation and image download
@@ -53,14 +53,14 @@ cargo install medio --git https://github.com/3kaiu/Medio
 me                          # Interactive TUI
 me scan /path/to/media      # Scan and identify media files
 me dedup /path/to/media     # Deduplicate files (dry-run by default)
-me scrape /path/to/media    # Scrape metadata (NFO + images)
+me scrape /path/to/media    # Scrape metadata only
 me rename /path/to/media    # Rename files (dry-run by default)
 me analyze /path/to/file    # Analyze a single file
 me organize /path/to/media  # Organize into library structure
 me config                   # Show config status
-me config --init             # Interactive config wizard
-me --version                 # Show version
-me --help                    # Show help
+me config --init            # Interactive config wizard
+me --version                # Show version
+me --help                   # Show help
 ```
 
 Preview safely
@@ -89,7 +89,10 @@ Key settings:
 - `api.tmdb_key` — TMDB API key for movie/TV metadata
 - `api.musicbrainz_user_agent` — MusicBrainz user agent
 - `ai.deepseek.key` — DeepSeek API key for AI-assisted identification
+- `scrape.fallback_chain` — Ordered scrape chain, e.g. `["local", "tmdb", "musicbrainz", "openlibrary", "ai", "guess"]`
+- `general.operation_log` — Enable or disable operation logging
 - `rename.movie_template` — Rename template (default: `{{title}}{{year}} - {{media_suffix}}`)
+- `cache.ttl_days` — TTL for cache cleanup before scrape/hash reuse
 
 ## 🏗 Architecture
 
@@ -134,6 +137,13 @@ Medio supports AI-assisted identification for ambiguous filenames:
 me config --init          # Set up AI provider interactively
 me --no-ai scan /path     # Disable AI for this run
 ```
+
+Rename notes:
+
+- `rename` and `organize --mode rename` both scrape metadata before planning names
+- `preserve_media_suffix=true` appends the suffix when the template omits `media_suffix`
+- `season_offset` applies to parsed and scraped season numbers
+- `rename_subtitles=false` disables subtitle companion renames
 
 ## 📊 Performance
 
