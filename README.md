@@ -132,6 +132,15 @@ src/
 | Hard link      | `--link hard` | Hard link (same disk)     |
 | Symlink        | `--link sym`  | Symbolic link to original |
 
+## 🌐 SMB / NAS Paths
+
+- Medio works with SMB shares when the share is mounted as a normal filesystem path.
+- On macOS, use paths like `/Volumes/ShareName/...`.
+- On Linux, use the mount point under `/mnt/...` or `/media/...`.
+- Prefer `copy` or `symlink` modes on network shares.
+- `hard link` usually does not work on SMB.
+- `move`/`rename` may fail across different volumes; if source and target are on different mounts, use copy-style workflows.
+
 ## 🧠 AI Integration
 
 Medio supports AI-assisted identification for ambiguous filenames:
