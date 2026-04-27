@@ -12,52 +12,67 @@ Media file manager: rename, deduplicate, organize.
 - **Organize** — Archive/local/rename modes with NFO generation and image download
 - **TUI** — Interactive terminal UI with search, tabs, and detail view
 
-## Install
+## Quick Start
 
-```bash
-cargo build --release
-# Binary at ./target/release/medio
+Install via Homebrew
+
+```
+brew tap 3kaiu/medio
+brew install medio
+```
+
+Or via script
+
+```
+# Optional: -s latest for main branch, -s 0.1.0 for specific version
+curl -fsSL https://raw.githubusercontent.com/3kaiu/Medio/main/install.sh | bash
+```
+
+Or from source
+
+```
+cargo install medio --git https://github.com/3kaiu/Medio
 ```
 
 ## Usage
 
-```bash
-# Scan media files
-medio scan /path/to/media
-
-# Deduplicate (dry-run by default)
-medio dedup /path/to/media
-medio --dry-run=false dedup /path/to/media  # execute
-
-# Scrape metadata
-medio scrape /path/to/media
-
-# Rename files
-medio rename /path/to/media
-
-# Analyze a single file
-medio analyze /path/to/file.mp4
-
-# Organize into library structure
-medio organize /path/to/media --mode archive
-medio organize /path/to/media --mode local --with-nfo --with-images
-
-# Interactive TUI
-medio tui
-
-# JSON output for any command
-medio --json scan /path/to/media
 ```
+me                          # Interactive TUI
+me scan /path/to/media      # Scan and identify media files
+me dedup /path/to/media     # Deduplicate files (dry-run by default)
+me scrape /path/to/media    # Scrape metadata (NFO + images)
+me rename /path/to/media    # Rename files (dry-run by default)
+me analyze /path/to/file    # Analyze a single file
+me organize /path/to/media  # Organize into library structure
+me config                   # Show config status
+me config --init             # Interactive config wizard
+me --version                 # Show version
+me --help                    # Show help
+```
+
+Preview safely
+
+```
+me dedup /path --dry-run=false    # Execute dedup (default is dry-run)
+me rename /path --dry-run=false   # Execute rename
+me organize /path --mode archive --with-nfo --with-images
+me organize /path --mode local --link sym   # Symlink instead of move
+me --json scan /path              # JSON output for piping
+```
+
+Short alias: `me` = `medio`
 
 ## Configuration
 
-Config file: `~/Library/Application Support/medio/config.toml` (macOS) or `~/.config/medio/config.toml` (Linux)
-
-```bash
-medio config  # Show config path
+```
+me config          # Show config status
+me config --init   # Interactive wizard (TMDB key, AI, organize root)
 ```
 
+Config file: `~/.config/medio/config.toml`
+
 Key settings:
+
 - `api.tmdb_key` — TMDB API key for movie/TV metadata
 - `api.musicbrainz_user_agent` — MusicBrainz user agent
 - `ai.deepseek.key` — DeepSeek API key for AI-assisted identification
