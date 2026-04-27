@@ -1,8 +1,21 @@
-# Medio
+<div align="center">
 
-Media file manager: rename, deduplicate, organize.
+# 🎬 Medio
 
-## Features
+**Media file manager: rename, deduplicate, organize.**
+
+[![CI](https://github.com/3kaiu/Medio/actions/workflows/ci.yml/badge.svg)](https://github.com/3kaiu/Medio/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![macOS](https://img.shields.io/badge/macOS-arm64%20%7C%20x86_64-blue)](https://github.com/3kaiu/Medio/releases)
+[![Linux](https://img.shields.io/badge/Linux-x86_64-orange)](https://github.com/3kaiu/Medio/releases)
+
+All-in-one media toolkit: FileBot + TinyMediaManager + dupeGuru in a single binary.
+
+</div>
+
+---
+
+## ✨ Features
 
 - **Scan** — Recursive media file discovery with smart identification (movie/TV/music/book/STRM)
 - **Dedup** — Progressive xxHash deduplication with quality-aware keep strategy
@@ -12,7 +25,7 @@ Media file manager: rename, deduplicate, organize.
 - **Organize** — Archive/local/rename modes with NFO generation and image download
 - **TUI** — Interactive terminal UI with search, tabs, and detail view
 
-## Quick Start
+## 🚀 Quick Start
 
 Install via Homebrew
 
@@ -34,7 +47,7 @@ Or from source
 cargo install medio --git https://github.com/3kaiu/Medio
 ```
 
-## Usage
+## 📖 Usage
 
 ```
 me                          # Interactive TUI
@@ -62,7 +75,7 @@ me --json scan /path              # JSON output for piping
 
 Short alias: `me` = `medio`
 
-## Configuration
+## ⚙️ Configuration
 
 ```
 me config          # Show config status
@@ -78,7 +91,7 @@ Key settings:
 - `ai.deepseek.key` — DeepSeek API key for AI-assisted identification
 - `rename.movie_template` — Rename template (default: `{{title}}{{year}} - {{media_suffix}}`)
 
-## Architecture
+## 🏗 Architecture
 
 ```
 src/
@@ -93,6 +106,43 @@ src/
 └── tui/          # Ratatui terminal UI
 ```
 
-## License
+## 🎯 Organize Modes
+
+| Mode      | Behavior                                                                    |
+| --------- | --------------------------------------------------------------------------- |
+| `archive` | Move to organized library tree (`Movies/`, `TV Shows/`, `Music/`, `Books/`) |
+| `local`   | Reorganize in-place within current directory                                |
+| `rename`  | Rename only, keep same directory                                            |
+
+## 🔗 Link Modes
+
+| Mode           | Flag          | Behavior                  |
+| -------------- | ------------- | ------------------------- |
+| Copy (default) | `--link none` | Copy files to target      |
+| Hard link      | `--link hard` | Hard link (same disk)     |
+| Symlink        | `--link sym`  | Symbolic link to original |
+
+## 🧠 AI Integration
+
+Medio supports AI-assisted identification for ambiguous filenames:
+
+- **DeepSeek** — Default provider, fast and affordable
+- **Cloudflare Workers AI** — Edge inference
+- **Custom** — Any OpenAI-compatible API
+
+```bash
+me config --init          # Set up AI provider interactively
+me --no-ai scan /path     # Disable AI for this run
+```
+
+## 📊 Performance
+
+- Pre-compiled regex patterns (3-5x faster on scan/identify/rename)
+- Concurrent scraping with `buffer_unordered` (N× speedup, default concurrency=3)
+- Reused HTTP connections (connection pooling for image downloads)
+- Rayon parallel hashing and identification
+- 3.5MB single binary, zero runtime dependencies
+
+## 📄 License
 
 MIT
