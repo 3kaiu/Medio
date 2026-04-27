@@ -53,7 +53,7 @@ fn handle_normal(app: &mut App, key: KeyEvent) {
                 Tab::Scan => app.filtered_items().get(app.selected).map(|(_, item)| {
                     format!("{:?}: {} ({})", item.media_type,
                         item.path.file_name().map(|f| f.to_string_lossy()).unwrap_or_default(),
-                        format_size(item.file_size))
+                        super::format_size(item.file_size))
                 }),
                 Tab::Dedup => app.filtered_dedup_groups().get(app.selected).map(|(_, group)| {
                     format!("Duplicate group {} ({} items)", group.content_id, group.items.len())
@@ -106,14 +106,4 @@ fn handle_confirm(app: &mut App, key: KeyEvent) {
         }
         _ => {}
     }
-}
-
-fn format_size(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
-    if bytes >= GB { format!("{:.1} GiB", bytes as f64 / GB as f64) }
-    else if bytes >= MB { format!("{:.1} MiB", bytes as f64 / MB as f64) }
-    else if bytes >= KB { format!("{:.1} KiB", bytes as f64 / KB as f64) }
-    else { format!("{bytes} B") }
 }

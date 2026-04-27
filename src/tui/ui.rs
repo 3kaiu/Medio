@@ -54,13 +54,13 @@ fn draw_content(f: &mut Frame, app: &App, area: Rect) {
                 let mtype = format!("{:?}", item.media_type);
                 let title = item.parsed.as_ref().map(|p| p.raw_title.clone()).unwrap_or_default();
                 let scraped = item.scraped.as_ref().map(|s| s.title.clone()).unwrap_or_else(|| "—".into());
-                let size = format_size(item.file_size);
+                let size = super::format_size(item.file_size);
                 let score = item.quality.as_ref().map(|q| format!("{:.0}", q.quality_score)).unwrap_or_default();
                 Row::new(vec![
-                    Cell::from(truncate_str(&name, 30)),
+                    Cell::from(super::truncate_str(&name, 30)),
                     Cell::from(mtype),
-                    Cell::from(truncate_str(&title, 20)),
-                    Cell::from(truncate_str(&scraped, 20)),
+                    Cell::from(super::truncate_str(&title, 20)),
+                    Cell::from(super::truncate_str(&scraped, 20)),
                     Cell::from(size),
                     Cell::from(score),
                 ])
@@ -82,7 +82,7 @@ fn draw_content(f: &mut Frame, app: &App, area: Rect) {
                 let remove = group.items.iter().filter(|it| !it.is_keep).count();
                 let best = group.items.iter().map(|it| it.quality_score).fold(0.0, f64::max);
                 Row::new(vec![
-                    Cell::from(truncate_str(&group.content_id, 34)),
+                    Cell::from(super::truncate_str(&group.content_id, 34)),
                     Cell::from(group.items.len().to_string()),
                     Cell::from(keep.to_string()),
                     Cell::from(remove.to_string()),
@@ -103,8 +103,8 @@ fn draw_content(f: &mut Frame, app: &App, area: Rect) {
             let filtered = app.filtered_rename_plans();
             let rows: Vec<Row> = filtered.iter().map(|(_, plan)| {
                 Row::new(vec![
-                    Cell::from(truncate_str(&plan.old_path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default(), 28)),
-                    Cell::from(truncate_str(&plan.new_path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default(), 28)),
+                    Cell::from(super::truncate_str(&plan.old_path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default(), 28)),
+                    Cell::from(super::truncate_str(&plan.new_path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default(), 28)),
                     Cell::from(plan.subtitle_plans.len().to_string()),
                 ])
             }).collect();
@@ -120,8 +120,8 @@ fn draw_content(f: &mut Frame, app: &App, area: Rect) {
             let rows: Vec<Row> = filtered.iter().map(|(_, plan)| {
                 Row::new(vec![
                     Cell::from(format!("{:?}", plan.action)),
-                    Cell::from(truncate_str(&plan.source.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default(), 24)),
-                    Cell::from(truncate_str(&plan.target.parent().map(|p| p.display().to_string()).unwrap_or_default(), 28)),
+                    Cell::from(super::truncate_str(&plan.source.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default(), 24)),
+                    Cell::from(super::truncate_str(&plan.target.parent().map(|p| p.display().to_string()).unwrap_or_default(), 28)),
                     Cell::from(if plan.nfo_content.is_some() { "nfo" } else { "—" }),
                     Cell::from(if plan.image_urls.is_empty() { "0".into() } else { plan.image_urls.len().to_string() }),
                 ])
@@ -240,17 +240,4 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         } else { Span::raw("") },
     ]);
     f.render_widget(Paragraph::new(status), area);
-}
-
-fn format_size(bytes: u64) -> String {
-    const KB: u64 = 1024; const MB: u64 = KB*1024; const GB: u64 = MB*1024;
-    if bytes >= GB { format!("{:.1}G", bytes as f64/GB as f64) }
-    else if bytes >= MB { format!("{:.1}M", bytes as f64/MB as f64) }
-    else if bytes >= KB { format!("{:.0}K", bytes as f64/KB as f64) }
-    else { format!("{bytes}B") }
-}
-
-fn truncate_str(s: &str, max: usize) -> String {
-    if s.chars().count() <= max { s.to_string() }
-    else { let t: String = s.chars().take(max-1).collect(); format!("{t}…") }
 }
