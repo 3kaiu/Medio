@@ -1,5 +1,6 @@
 use crate::core::config::ApiConfig;
-use crate::models::media::{MediaType, ParsedInfo, ScrapeResult, ScrapeSource};
+use crate::models::media::ScrapeResult;
+use crate::models::media::ScrapeSource;
 use reqwest::Client;
 use serde::Deserialize;
 
@@ -21,55 +22,6 @@ impl TmdbScraper {
 
     pub fn is_configured(&self) -> bool {
         !self.api_key.is_empty()
-    }
-
-    pub async fn search_movie_with_lang(
-        &self,
-        title: &str,
-        year: Option<u16>,
-        lang: Option<&str>,
-    ) -> Result<Option<ScrapeResult>, Box<dyn std::error::Error>> {
-        if !self.is_configured() {
-            return Ok(None);
-        }
-
-        let mut url = format!("{}/search/movie?api_key={}&query={}", self.base_url, self.api_key, urlencoding::encode(title));
-        if let Some(y) = year {
-            url.push_str(&format!("&year={y}"));
-        }
-        if let Some(lang) = lang {
-            url.push_str(&format!("&language={lang}"));
-        }
-
-        let resp = self.client.get(&url).send().await?;
-        let search: TmdbMovieSearchResponse = resp.json().await?;
-
-        let first = match search.results.first() {
-            Some(r) => r,
-            None => return Ok(None),
-        };
-
-        Ok(Some(ScrapeResult {
-            source: ScrapeSource::Tmdb,
-            title: first.title.clone(),
-            title_original: first.original_title.clone(),
-            year: first.release_date.as_ref().and_then(|d| d.get(..4).and_then(|y| y.parse().ok())),
-            overview: first.overview.clone(),
-            rating: first.vote_average,
-            season_number: None,
-            episode_number: None,
-            episode_name: None,
-            poster_url: first.poster_path.as_ref().map(|p| format!("https://image.tmdb.org/t/p/original{p}")),
-            fanart_url: first.backdrop_path.as_ref().map(|p| format!("https://image.tmdb.org/t/p/original{p}")),
-            artist: None,
-            album: None,
-            track_number: None,
-            author: None,
-            cover_url: None,
-            tmdb_id: Some(first.id as u64),
-            musicbrainz_id: None,
-            openlibrary_id: None,
-        }))
     }
 
     pub async fn search_movie_candidates(
@@ -162,55 +114,6 @@ impl TmdbScraper {
         }).collect())
     }
 
-    pub async fn search_tv_with_lang(
-        &self,
-        title: &str,
-        year: Option<u16>,
-        lang: Option<&str>,
-    ) -> Result<Option<ScrapeResult>, Box<dyn std::error::Error>> {
-        if !self.is_configured() {
-            return Ok(None);
-        }
-
-        let mut url = format!("{}/search/tv?api_key={}&query={}", self.base_url, self.api_key, urlencoding::encode(title));
-        if let Some(y) = year {
-            url.push_str(&format!("&first_air_date_year={y}"));
-        }
-        if let Some(lang) = lang {
-            url.push_str(&format!("&language={lang}"));
-        }
-
-        let resp = self.client.get(&url).send().await?;
-        let search: TmdbTvSearchResponse = resp.json().await?;
-
-        let first = match search.results.first() {
-            Some(r) => r,
-            None => return Ok(None),
-        };
-
-        Ok(Some(ScrapeResult {
-            source: ScrapeSource::Tmdb,
-            title: first.name.clone().unwrap_or_default(),
-            title_original: first.original_name.clone(),
-            year: first.first_air_date.as_ref().and_then(|d| d.get(..4).and_then(|y| y.parse().ok())),
-            overview: first.overview.clone(),
-            rating: first.vote_average,
-            season_number: None,
-            episode_number: None,
-            episode_name: None,
-            poster_url: first.poster_path.as_ref().map(|p| format!("https://image.tmdb.org/t/p/original{p}")),
-            fanart_url: first.backdrop_path.as_ref().map(|p| format!("https://image.tmdb.org/t/p/original{p}")),
-            artist: None,
-            album: None,
-            track_number: None,
-            author: None,
-            cover_url: None,
-            tmdb_id: Some(first.id as u64),
-            musicbrainz_id: None,
-            openlibrary_id: None,
-        }))
-    }
-
     pub async fn get_episode_with_lang(
         &self,
         tv_id: u64,
@@ -250,57 +153,6 @@ impl TmdbScraper {
             musicbrainz_id: None,
             openlibrary_id: None,
         }))
-    }
-
-    /// Auto-scrape based on parsed info
-    pub async fn scrape(&self, parsed: &ParsedInfo, media_type: &MediaType) -> Result<Option<ScrapeResult>, Box<dyn std::error::Error>> {
-        match media_type {
-            MediaType::Movie => self.search_movie_with_lang(&parsed.raw_title, parsed.year, None).await,
-            MediaType::TvShow => {
-                let result = self.search_tv_with_lang(&parsed.raw_title, parsed.year, None).await?;
-                if let Some(ref sr) = result {
-                    if let (Some(s), Some(e)) = (parsed.season, parsed.episode) {
-                        if let Some(tmdb_id) = sr.tmdb_id {
-                            if let Some(ep_result) = self.get_episode_with_lang(tmdb_id, s, e, None).await? {
-                                let mut merged = sr.clone();
-                                merged.season_number = ep_result.season_number;
-                                merged.episode_number = ep_result.episode_number;
-                                merged.episode_name = ep_result.episode_name;
-                                return Ok(Some(merged));
-                            }
-                        }
-                    }
-                }
-                Ok(result)
-            }
-            _ => Ok(None),
-        }
-    }
-
-    /// Auto-scrape with optional Chinese title priority
-    pub async fn scrape_with_language(&self, parsed: &ParsedInfo, media_type: &MediaType, chinese_priority: bool) -> Result<Option<ScrapeResult>, Box<dyn std::error::Error>> {
-        let lang = if chinese_priority { Some("zh-CN") } else { None };
-        match media_type {
-            MediaType::Movie => self.search_movie_with_lang(&parsed.raw_title, parsed.year, lang).await,
-            MediaType::TvShow => {
-                let result = self.search_tv_with_lang(&parsed.raw_title, parsed.year, lang).await?;
-                if let Some(ref sr) = result {
-                    if let (Some(s), Some(e)) = (parsed.season, parsed.episode) {
-                        if let Some(tmdb_id) = sr.tmdb_id {
-                            if let Some(ep_result) = self.get_episode_with_lang(tmdb_id, s, e, lang).await? {
-                                let mut merged = sr.clone();
-                                merged.season_number = ep_result.season_number;
-                                merged.episode_number = ep_result.episode_number;
-                                merged.episode_name = ep_result.episode_name;
-                                return Ok(Some(merged));
-                            }
-                        }
-                    }
-                }
-                Ok(result)
-            }
-            _ => Ok(None),
-        }
     }
 }
 

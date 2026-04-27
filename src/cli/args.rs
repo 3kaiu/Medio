@@ -41,6 +41,10 @@ pub enum Commands {
     Scan {
         /// Directory to scan
         path: String,
+
+        /// Also scrape metadata during scan
+        #[arg(long)]
+        with_scrape: bool,
     },
 
     /// Scrape metadata (NFO + images)

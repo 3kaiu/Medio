@@ -4,9 +4,10 @@ use crate::core::identifier::Identifier;
 use crate::core::keyword_filter::KeywordFilter;
 use crate::core::scanner::Scanner;
 use crate::models::media::MediaItem;
+use crate::scraper;
 use std::path::Path;
 
-pub fn run(path: &str, config: &AppConfig, json_output: bool) {
+pub fn run(path: &str, config: &AppConfig, json_output: bool, with_scrape: bool) {
     let root = Path::new(path);
     if !root.exists() {
         eprintln!("Error: path does not exist: {path}");
@@ -34,10 +35,18 @@ pub fn run(path: &str, config: &AppConfig, json_output: bool) {
     // Step 3: Context inference (parent dir)
     for item in items.iter_mut() {
         if let Some(parsed) = &item.parsed {
-            let parent_dirs = collect_parent_dirs(&item.path, 3);
+            let parent_dirs = ContextInfer::collect_parent_dirs(&item.path, 3);
             let inferred = ContextInfer::infer(parsed, &parent_dirs);
             item.parsed = Some(inferred);
         }
+    }
+
+    // Step 4: Optional scrape
+    if with_scrape {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            scraper::populate_scrape_results(&mut items, config).await;
+        });
     }
 
     // Output
@@ -49,18 +58,6 @@ pub fn run(path: &str, config: &AppConfig, json_output: bool) {
     }
 }
 
-fn collect_parent_dirs(path: &Path, max: usize) -> Vec<&Path> {
-    let mut dirs = Vec::new();
-    let mut current = path.parent();
-    while let Some(dir) = current {
-        if dirs.len() >= max {
-            break;
-        }
-        dirs.push(dir);
-        current = dir.parent();
-    }
-    dirs
-}
 
 fn print_scan_table(items: &[MediaItem]) {
     use console::style;
@@ -94,7 +91,7 @@ fn print_scan_table(items: &[MediaItem]) {
         println!(
             "{:<8} {:<40} {:<6} {:<8} {}",
             type_str,
-            truncate(&title, 40),
+            super::truncate(&title, 40),
             year,
             season_ep,
             size,
@@ -102,13 +99,4 @@ fn print_scan_table(items: &[MediaItem]) {
     }
 
     println!("\n{} media files found", items.len());
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let truncated: String = s.chars().take(max - 1).collect();
-        format!("{truncated}…")
-    }
 }

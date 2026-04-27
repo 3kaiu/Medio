@@ -22,16 +22,24 @@ fn main() {
         .init();
 
     // Load config
-    let config = AppConfig::load().unwrap_or_else(|e| {
+    let mut config = AppConfig::load().unwrap_or_else(|e| {
         tracing::warn!("Failed to load config: {e}, using defaults");
         AppConfig::default()
     });
 
+    // Apply CLI flags to config
+    if cli.no_ai {
+        config.ai.enabled = false;
+    }
+    if cli.concurrency != config.ai.concurrency {
+        config.ai.concurrency = cli.concurrency;
+    }
+
     core::oplog::init(config.general.operation_log);
 
     match cli.command {
-        Commands::Scan { path } => {
-            cli::commands::scan::run(&path, &config, cli.json);
+        Commands::Scan { path, with_scrape } => {
+            cli::commands::scan::run(&path, &config, cli.json, with_scrape);
         }
         Commands::Scrape { path } => {
             cli::commands::scrape::run(&path, &config, cli.json);
@@ -42,13 +50,13 @@ fn main() {
         Commands::Dedup { path } => {
             // CLI --dry-run=false means user wants to execute, but config default is dry_run=true
             // So actual dry_run = cli.dry_run (from flag, default true)
-            cli::commands::dedup::run(&path, &config, cli.dry_run, cli.json);
+            cli::commands::dedup::run(&path, &config, cli.dry_run, cli.json, &cli.probe);
         }
         Commands::Organize { path, mode, with_nfo, with_images, link } => {
             cli::commands::organize::run(&path, &config, &mode, with_nfo, with_images, &link, cli.dry_run, cli.json);
         }
         Commands::Analyze { path } => {
-            cli::commands::analyze::run(&path, &config, cli.json);
+            cli::commands::analyze::run(&path, &config, cli.json, &cli.probe);
         }
         Commands::Tui => {
             cli::commands::tui::run(".", &config);

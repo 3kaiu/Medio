@@ -29,7 +29,7 @@ pub fn run(path: &str, config: &AppConfig, dry_run: bool, json_output: bool) {
 
     for item in items.iter_mut() {
         if let Some(parsed) = &item.parsed {
-            let parent_dirs = collect_parent_dirs(&item.path, 3);
+            let parent_dirs = ContextInfer::collect_parent_dirs(&item.path, 3);
             let inferred = ContextInfer::infer(parsed, &parent_dirs);
             item.parsed = Some(inferred);
         }
@@ -81,16 +81,6 @@ pub fn run(path: &str, config: &AppConfig, dry_run: bool, json_output: bool) {
     println!("\n{} rename plans generated, {} actions taken.", plans.len(), actions.len());
 }
 
-fn collect_parent_dirs(path: &std::path::Path, max: usize) -> Vec<&std::path::Path> {
-    let mut dirs = Vec::new();
-    let mut current = path.parent();
-    while let Some(dir) = current {
-        if dirs.len() >= max { break; }
-        dirs.push(dir);
-        current = dir.parent();
-    }
-    dirs
-}
 
 fn print_rename_table(plans: &[crate::models::media::RenamePlan]) {
     use console::style;
@@ -105,21 +95,12 @@ fn print_rename_table(plans: &[crate::models::media::RenamePlan]) {
     for plan in plans {
         let old_name = plan.old_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
         let new_name = plan.new_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-        println!("  {} → {}", truncate(&old_name, 50), truncate(&new_name, 50));
+        println!("  {} → {}", super::truncate(&old_name, 50), super::truncate(&new_name, 50));
 
         for sub in &plan.subtitle_plans {
             let sub_old = sub.old_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
             let sub_new = sub.new_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-            println!("  {} → {}  (subtitle)", truncate(&sub_old, 48), truncate(&sub_new, 48));
+            println!("  {} → {}  (subtitle)", super::truncate(&sub_old, 48), super::truncate(&sub_new, 48));
         }
-    }
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let truncated: String = s.chars().take(max - 1).collect();
-        format!("{truncated}…")
     }
 }

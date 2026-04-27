@@ -35,13 +35,40 @@ fn handle_normal(app: &mut App, key: KeyEvent) {
         KeyCode::Char('2') => { app.tab = Tab::Dedup; app.selected = 0; app.scroll_offset = 0; }
         KeyCode::Char('3') => { app.tab = Tab::Rename; app.selected = 0; app.scroll_offset = 0; }
         KeyCode::Char('4') => { app.tab = Tab::Organize; app.selected = 0; app.scroll_offset = 0; }
-        KeyCode::Enter => {
-            // Show details of selected item
-            if let Some((_, item)) = app.filtered_items().get(app.selected) {
-                app.status_msg = format!("{:?}: {} ({})", item.media_type,
-                    item.path.file_name().map(|f| f.to_string_lossy()).unwrap_or_default(),
-                    format_size(item.file_size));
+        KeyCode::Char('v') => {
+            if app.tab == Tab::Scan {
+                app.toggle_view();
             }
+        }
+        KeyCode::Char('x') => {
+            match app.tab {
+                Tab::Rename => app.request_rename_execute(),
+                Tab::Dedup => app.request_dedup_execute(),
+                Tab::Organize => app.request_organize_execute(),
+                _ => {}
+            }
+        }
+        KeyCode::Enter => {
+            app.status_msg = match app.tab {
+                Tab::Scan => app.filtered_items().get(app.selected).map(|(_, item)| {
+                    format!("{:?}: {} ({})", item.media_type,
+                        item.path.file_name().map(|f| f.to_string_lossy()).unwrap_or_default(),
+                        format_size(item.file_size))
+                }),
+                Tab::Dedup => app.filtered_dedup_groups().get(app.selected).map(|(_, group)| {
+                    format!("Duplicate group {} ({} items)", group.content_id, group.items.len())
+                }),
+                Tab::Rename => app.filtered_rename_plans().get(app.selected).map(|(_, plan)| {
+                    format!("Rename {} -> {}",
+                        plan.old_path.file_name().map(|f| f.to_string_lossy()).unwrap_or_default(),
+                        plan.new_path.file_name().map(|f| f.to_string_lossy()).unwrap_or_default())
+                }),
+                Tab::Organize => app.filtered_organize_plans().get(app.selected).map(|(_, plan)| {
+                    format!("Organize {} -> {}",
+                        plan.source.file_name().map(|f| f.to_string_lossy()).unwrap_or_default(),
+                        plan.target.display())
+                }),
+            }.unwrap_or_else(|| "No item selected".into());
         }
         _ => {}
     }
@@ -72,12 +99,10 @@ fn handle_search(app: &mut App, key: KeyEvent) {
 fn handle_confirm(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Char('y') | KeyCode::Enter => {
-            app.mode = Mode::Normal;
-            app.status_msg = "Confirmed!".into();
+            app.confirm_pending_action();
         }
         KeyCode::Char('n') | KeyCode::Esc => {
-            app.mode = Mode::Normal;
-            app.status_msg = "Cancelled".into();
+            app.cancel_pending_action();
         }
         _ => {}
     }

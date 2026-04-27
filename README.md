@@ -23,7 +23,7 @@ All-in-one media toolkit: FileBot + TinyMediaManager + dupeGuru in a single bina
 - **Rename** — Template-based renaming with subtitle file tracking
 - **Analyze** — Single-file deep analysis (hash, quality probe, scrape, AI)
 - **Organize** — Archive/local/rename modes with NFO generation and image download
-- **TUI** — Interactive terminal UI with search, tabs, and detail view
+- **TUI** — Interactive terminal UI with search, plan previews, and in-app confirm/execute for dedup/rename/organize
 
 ## 🚀 Quick Start
 
@@ -74,6 +74,13 @@ me --json scan /path              # JSON output for piping
 ```
 
 Short alias: `me` = `medio`
+
+TUI notes:
+
+- `Scan` tab shows scanned items and scraped metadata previews
+- `Dedup`, `Rename`, and `Organize` tabs show real engine-generated previews
+- Press `x` in `Dedup`, `Rename`, or `Organize` to enter confirm mode and execute the current tab's plans
+- In dry-run mode, TUI execution stays preview-only; with `dry_run=false`, successful actions trigger an automatic rescan
 
 ## ⚙️ Configuration
 

@@ -137,8 +137,8 @@ async fn scrape_with_fallback(
                             MediaType::TvShow => tmdb.search_tv_candidates(&parsed.raw_title, parsed.year, lang, 5).await.ok().unwrap_or_default(),
                             _ => Vec::new(),
                         };
-                        if candidates.len() == 1 {
-                            Some(candidates.into_iter().next().unwrap())
+                        let selected = if candidates.len() == 1 {
+                            candidates.into_iter().next()
                         } else if candidates.len() > 1 {
                             // Use embedding reranking if configured
                             if embedding_client.is_configured() {
@@ -157,6 +157,35 @@ async fn scrape_with_fallback(
                             }
                         } else {
                             None
+                        };
+
+                        if media_type == MediaType::TvShow {
+                            if let Some(base) = selected {
+                                if let (Some(season), Some(episode)) = (parsed.season, parsed.episode) {
+                                    if let Some(tmdb_id) = base.tmdb_id {
+                                        if let Ok(Some(ep_result)) =
+                                            tmdb.get_episode_with_lang(tmdb_id, season, episode, lang).await
+                                        {
+                                            let mut merged = base;
+                                            merged.season_number = ep_result.season_number;
+                                            merged.episode_number = ep_result.episode_number;
+                                            merged.episode_name = ep_result.episode_name;
+                                            merged.poster_url = ep_result.poster_url.or(merged.poster_url);
+                                            Some(merged)
+                                        } else {
+                                            Some(base)
+                                        }
+                                    } else {
+                                        Some(base)
+                                    }
+                                } else {
+                                    Some(base)
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            selected
                         }
                     } else {
                         None
@@ -196,7 +225,30 @@ async fn scrape_with_fallback(
             "ai" => {
                 if let Some(client) = ai_client {
                     let filename = path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
-                    client.identify(&filename).await.ok().flatten()
+                    if let Some(result) = client.identify(&filename).await.ok().flatten() {
+                        // Try to refine title via suggest_title and re-search TMDB
+                        if matches!(media_type, MediaType::Movie | MediaType::TvShow) {
+                            if let Ok(Some(better_title)) = client.suggest_title(&filename, &result.title).await {
+                                let lang = if chinese_priority { Some("zh-CN") } else { None };
+                                let re_search = match media_type {
+                                    MediaType::Movie => tmdb.search_movie_candidates(&better_title, result.year, lang, 1).await.ok().and_then(|c| c.into_iter().next()),
+                                    MediaType::TvShow => tmdb.search_tv_candidates(&better_title, result.year, lang, 1).await.ok().and_then(|c| c.into_iter().next()),
+                                    _ => None,
+                                };
+                                if re_search.is_some() {
+                                    re_search
+                                } else {
+                                    Some(result)
+                                }
+                            } else {
+                                Some(result)
+                            }
+                        } else {
+                            Some(result)
+                        }
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }

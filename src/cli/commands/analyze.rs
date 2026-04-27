@@ -1,4 +1,3 @@
-use crate::ai::openai_compat::OpenAiCompat;
 use crate::core::config::AppConfig;
 use crate::core::context_infer::ContextInfer;
 use crate::core::hasher::FileHasher;
@@ -9,13 +8,10 @@ use crate::db::cache::Cache;
 use crate::media::ffprobe::FfprobeProbe;
 use crate::media::native_probe::NativeProbe;
 use crate::media::probe::MediaProbe;
-use crate::scraper::local;
-use crate::scraper::musicbrainz::MusicBrainzScraper;
-use crate::scraper::openlibrary::OpenLibraryScraper;
-use crate::scraper::tmdb::TmdbScraper;
+use crate::scraper;
 use std::path::Path;
 
-pub fn run(path: &str, config: &AppConfig, json_output: bool) {
+pub fn run(path: &str, config: &AppConfig, json_output: bool, probe_backend: &str) {
     let target = Path::new(path);
     if !target.exists() {
         eprintln!("Error: path does not exist: {path}");
@@ -48,7 +44,7 @@ pub fn run(path: &str, config: &AppConfig, json_output: bool) {
     {
         let item = &mut items[0];
         if let Some(parsed) = &item.parsed {
-            let parent_dirs = collect_parent_dirs(&item.path, 3);
+            let parent_dirs = ContextInfer::collect_parent_dirs(&item.path, 3);
             let inferred = ContextInfer::infer(parsed, &parent_dirs);
             item.parsed = Some(inferred);
         }
@@ -64,7 +60,13 @@ pub fn run(path: &str, config: &AppConfig, json_output: bool) {
     // Step 4: Probe quality
     {
         let item = &mut items[0];
-        let use_ffprobe = !config.general.dry_run && FfprobeProbe::is_available();
+        let use_ffprobe = if probe_backend == "ffprobe" {
+            FfprobeProbe::is_available()
+        } else if probe_backend == "native" {
+            false
+        } else {
+            !config.general.dry_run && FfprobeProbe::is_available()
+        };
         if use_ffprobe {
             let probe = FfprobeProbe::new(config.quality.clone());
             if let Ok(quality) = probe.probe(&item.path) {
@@ -78,74 +80,11 @@ pub fn run(path: &str, config: &AppConfig, json_output: bool) {
         }
     }
 
-    // Step 5: Scrape (local NFO + online)
-    {
-        let item = &mut items[0];
-        if let Some(nfo_path) = local::find_nfo(&item.path) {
-            if let Some(result) = local::read_nfo(&nfo_path) {
-                item.scraped = Some(result);
-            }
-        }
-    }
-
-    {
-        let item = &mut items[0];
-        if item.scraped.is_none() {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(async {
-                let tmdb = TmdbScraper::new(&config.api);
-                let mb = MusicBrainzScraper::new(&config.api);
-                let ol = OpenLibraryScraper::new();
-
-                let result = match item.media_type {
-                    crate::models::media::MediaType::Movie | crate::models::media::MediaType::TvShow => {
-                        if let Some(parsed) = &item.parsed {
-                            tmdb.scrape(parsed, &item.media_type).await.ok().flatten()
-                        } else {
-                            None
-                        }
-                    }
-                    crate::models::media::MediaType::Music => {
-                        if let Some(parsed) = &item.parsed {
-                            mb.search_recording(
-                                parsed.raw_title.split('.').next().unwrap_or(&parsed.raw_title),
-                                &parsed.raw_title,
-                            ).await.ok().flatten()
-                        } else {
-                            None
-                        }
-                    }
-                    crate::models::media::MediaType::Novel => {
-                        if let Some(parsed) = &item.parsed {
-                            ol.search(&parsed.raw_title, None).await.ok().flatten()
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                };
-
-                if result.is_some() {
-                    item.scraped = result;
-                }
-            });
-        }
-    }
-
-    // Step 6: AI assist (if enabled and not yet scraped)
-    if config.ai.enabled {
-        let item = &mut items[0];
-        if item.scraped.is_none() {
-            let ai = OpenAiCompat::from_config(&config.ai);
-            if ai.is_configured() {
-                let rt = tokio::runtime::Runtime::new().unwrap();
-                let filename = item.path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
-                if let Ok(Some(result)) = rt.block_on(ai.identify(&filename)) {
-                    item.scraped = Some(result);
-                }
-            }
-        }
-    }
+    // Step 5: Scrape using the shared fallback chain + cache + AI path
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        scraper::populate_scrape_results(&mut items, config).await;
+    });
 
     // Output
     let item = &items[0];
@@ -157,16 +96,6 @@ pub fn run(path: &str, config: &AppConfig, json_output: bool) {
     }
 }
 
-fn collect_parent_dirs(path: &std::path::Path, max: usize) -> Vec<&std::path::Path> {
-    let mut dirs = Vec::new();
-    let mut current = path.parent();
-    while let Some(dir) = current {
-        if dirs.len() >= max { break; }
-        dirs.push(dir);
-        current = dir.parent();
-    }
-    dirs
-}
 
 fn print_analysis(item: &crate::models::media::MediaItem) {
     use console::style;

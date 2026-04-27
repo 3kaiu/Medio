@@ -14,7 +14,7 @@ use indicatif::HumanBytes;
 use rayon::prelude::*;
 use std::path::Path;
 
-pub fn run(path: &str, config: &AppConfig, dry_run: bool, json_output: bool) {
+pub fn run(path: &str, config: &AppConfig, dry_run: bool, json_output: bool, probe_backend: &str) {
     let root = Path::new(path);
     if !root.exists() {
         eprintln!("Error: path does not exist: {path}");
@@ -38,7 +38,7 @@ pub fn run(path: &str, config: &AppConfig, dry_run: bool, json_output: bool) {
     // Step 3: Context inference
     for item in items.iter_mut() {
         if let Some(parsed) = &item.parsed {
-            let parent_dirs = collect_parent_dirs(&item.path, 3);
+            let parent_dirs = ContextInfer::collect_parent_dirs(&item.path, 3);
             let inferred = ContextInfer::infer(parsed, &parent_dirs);
             item.parsed = Some(inferred);
         }
@@ -54,7 +54,13 @@ pub fn run(path: &str, config: &AppConfig, dry_run: bool, json_output: bool) {
 
     // Step 5: Probe quality
     println!("Probing media quality...");
-    let use_ffprobe = !config.general.dry_run && FfprobeProbe::is_available();
+    let use_ffprobe = if probe_backend == "ffprobe" {
+        FfprobeProbe::is_available()
+    } else if probe_backend == "native" {
+        false
+    } else {
+        !config.general.dry_run && FfprobeProbe::is_available()
+    };
 
     if use_ffprobe {
         let probe = FfprobeProbe::new(config.quality.clone());
@@ -88,10 +94,12 @@ pub fn run(path: &str, config: &AppConfig, dry_run: bool, json_output: bool) {
             .iter()
             .map(|group| group.items.iter().filter(|item| !item.is_keep).count())
             .sum::<usize>();
-        println!("\n{} duplicate files will be removed. Proceed? [y/N]", pending_actions);
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input).ok();
-        if input.trim().to_lowercase() != "y" {
+        if !dialoguer::Confirm::new()
+            .with_prompt(format!("{} duplicate files will be removed. Proceed?", pending_actions))
+            .default(false)
+            .interact()
+            .unwrap_or(false)
+        {
             println!("Aborted.");
             return;
         }
@@ -116,18 +124,6 @@ fn probe_items(items: &mut [MediaItem], probe: &dyn MediaProbe) {
     });
 }
 
-fn collect_parent_dirs(path: &std::path::Path, max: usize) -> Vec<&std::path::Path> {
-    let mut dirs = Vec::new();
-    let mut current = path.parent();
-    while let Some(dir) = current {
-        if dirs.len() >= max {
-            break;
-        }
-        dirs.push(dir);
-        current = dir.parent();
-    }
-    dirs
-}
 
 fn print_dedup_table(groups: &[crate::engine::deduplicator::DuplicateGroup], items: &[MediaItem]) {
     use console::style;
@@ -157,20 +153,11 @@ fn print_dedup_table(groups: &[crate::engine::deduplicator::DuplicateGroup], ite
             println!(
                 "  {:<10} {:<50} {:<10} {:<10} {}",
                 keep,
-                truncate(&item.path.display().to_string(), 50),
+                super::truncate(&item.path.display().to_string(), 50),
                 HumanBytes(item.file_size).to_string(),
                 quality,
                 score,
             );
         }
-    }
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let truncated: String = s.chars().take(max - 1).collect();
-        format!("{truncated}…")
     }
 }

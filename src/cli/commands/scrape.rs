@@ -29,7 +29,7 @@ pub fn run(path: &str, config: &AppConfig, json_output: bool) {
 
     for item in items.iter_mut() {
         if let Some(parsed) = &item.parsed {
-            let parent_dirs = collect_parent_dirs(&item.path, 3);
+            let parent_dirs = ContextInfer::collect_parent_dirs(&item.path, 3);
             let inferred = ContextInfer::infer(parsed, &parent_dirs);
             item.parsed = Some(inferred);
         }
@@ -50,16 +50,6 @@ pub fn run(path: &str, config: &AppConfig, json_output: bool) {
     }
 }
 
-fn collect_parent_dirs(path: &std::path::Path, max: usize) -> Vec<&std::path::Path> {
-    let mut dirs = Vec::new();
-    let mut current = path.parent();
-    while let Some(dir) = current {
-        if dirs.len() >= max { break; }
-        dirs.push(dir);
-        current = dir.parent();
-    }
-    dirs
-}
 
 fn print_scrape_table(items: &[MediaItem]) {
     use console::style;
@@ -83,8 +73,8 @@ fn print_scrape_table(items: &[MediaItem]) {
         println!(
             "{:<8} {:<40} {:<40} {:<12} {}",
             format!("{:?}", item.media_type),
-            truncate(&item.parsed.as_ref().map(|p| p.raw_title.clone()).unwrap_or_default(), 40),
-            truncate(&scraped_title, 40),
+            super::truncate(&item.parsed.as_ref().map(|p| p.raw_title.clone()).unwrap_or_default(), 40),
+            super::truncate(&scraped_title, 40),
             source,
             rating,
         );
@@ -92,13 +82,4 @@ fn print_scrape_table(items: &[MediaItem]) {
 
     let scraped_count = items.iter().filter(|i| i.scraped.is_some()).count();
     println!("\n{}/{} files scraped", scraped_count, items.len());
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let truncated: String = s.chars().take(max - 1).collect();
-        format!("{truncated}…")
-    }
 }

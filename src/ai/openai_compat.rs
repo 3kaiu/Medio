@@ -94,7 +94,6 @@ impl OpenAiCompat {
     }
 
     /// Suggest a better title for ambiguous filenames
-    #[allow(dead_code)]
     pub async fn suggest_title(&self, filename: &str, current_title: &str) -> Result<Option<String>, Box<dyn std::error::Error>> {
         if !self.is_configured() {
             return Ok(None);

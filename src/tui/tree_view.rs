@@ -7,12 +7,11 @@ use ratatui::{
     Frame,
 };
 
-#[allow(dead_code)]
-pub fn draw_tree(f: &mut Frame, items: &[MediaItem], selected: usize, area: Rect, title: &str) {
+pub fn draw_tree(f: &mut Frame, items: &[&MediaItem], selected: usize, area: Rect, title: &str) {
     let mut groups: std::collections::BTreeMap<String, Vec<(usize, &MediaItem)>> = std::collections::BTreeMap::new();
     for (idx, item) in items.iter().enumerate() {
         let dir = item.path.parent().map(|p| p.display().to_string()).unwrap_or_else(|| ".".into());
-        groups.entry(dir).or_default().push((idx, item));
+        groups.entry(dir).or_default().push((idx, *item));
     }
 
     let mut list_items: Vec<ListItem> = Vec::new();

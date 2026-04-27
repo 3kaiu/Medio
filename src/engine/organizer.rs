@@ -1,6 +1,8 @@
 use crate::core::config::OrganizeConfig;
 use crate::core::types::{LinkMode, OrganizeMode};
+use crate::engine::nfo_writer;
 use crate::models::media::{MediaItem, MediaType};
+use crate::scraper::image_scraper;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
@@ -59,19 +61,17 @@ impl Organizer {
 
             // NFO content
             let nfo_content = if self.config.with_nfo {
-                self.generate_nfo(item)
+                nfo_writer::generate(item)
             } else {
                 None
             };
 
             // Image URLs from scraped data
             let image_urls = if self.config.with_images {
-                let mut urls = Vec::new();
-                if let Some(s) = &item.scraped {
-                    if let Some(p) = &s.poster_url { urls.push(p.clone()); }
-                    if let Some(f) = &s.fanart_url { urls.push(f.clone()); }
-                }
-                urls
+                item.scraped
+                    .as_ref()
+                    .map(image_scraper::collect_urls)
+                    .unwrap_or_default()
             } else {
                 Vec::new()
             };
@@ -148,57 +148,6 @@ impl Organizer {
         }
     }
 
-    fn generate_nfo(&self, item: &MediaItem) -> Option<String> {
-        let scraped = item.scraped.as_ref()?;
-        let mut lines = Vec::new();
-
-        match item.media_type {
-            MediaType::Movie => {
-                lines.push("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>".into());
-                lines.push("<movie>".into());
-                lines.push(format!("  <title>{}</title>", scraped.title));
-                if let Some(y) = scraped.year { lines.push(format!("  <year>{y}</year>")); }
-                if let Some(r) = scraped.rating { lines.push(format!("  <rating>{r:.1}</rating>")); }
-                if let Some(o) = &scraped.overview { lines.push(format!("  <plot>{o}</plot>")); }
-                if let Some(p) = &scraped.poster_url { lines.push(format!("  <thumb>{p}</thumb>")); }
-                if let Some(f) = &scraped.fanart_url { lines.push(format!("  <fanart><thumb>{f}</thumb></fanart>")); }
-                if let Some(id) = scraped.tmdb_id { lines.push(format!("  <uniqueid type=\"tmdb\">{id}</uniqueid>")); }
-                lines.push("</movie>".into());
-            }
-            MediaType::TvShow => {
-                lines.push("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>".into());
-                if scraped.episode_number.is_some() {
-                    lines.push("<episodedetails>".into());
-                    lines.push(format!("  <title>{}</title>", scraped.episode_name.as_deref().unwrap_or("")));
-                    if let Some(s) = scraped.season_number { lines.push(format!("  <season>{s}</season>")); }
-                    if let Some(e) = scraped.episode_number { lines.push(format!("  <episode>{e}</episode>")); }
-                    if let Some(o) = &scraped.overview { lines.push(format!("  <plot>{o}</plot>")); }
-                    if let Some(r) = scraped.rating { lines.push(format!("  <rating>{r:.1}</rating>")); }
-                    lines.push("</episodedetails>".into());
-                } else {
-                    lines.push("<tvshow>".into());
-                    lines.push(format!("  <title>{}</title>", scraped.title));
-                    if let Some(y) = scraped.year { lines.push(format!("  <year>{y}</year>")); }
-                    if let Some(o) = &scraped.overview { lines.push(format!("  <plot>{o}</plot>")); }
-                    if let Some(p) = &scraped.poster_url { lines.push(format!("  <thumb>{p}</thumb>")); }
-                    if let Some(id) = scraped.tmdb_id { lines.push(format!("  <uniqueid type=\"tmdb\">{id}</uniqueid>")); }
-                    lines.push("</tvshow>".into());
-                }
-            }
-            MediaType::Music => {
-                lines.push("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>".into());
-                lines.push("<music>".into());
-                lines.push(format!("  <title>{}</title>", scraped.title));
-                if let Some(a) = &scraped.artist { lines.push(format!("  <artist>{a}</artist>")); }
-                if let Some(al) = &scraped.album { lines.push(format!("  <album>{al}</album>")); }
-                lines.push("</music>".into());
-            }
-            _ => return None,
-        }
-
-        Some(lines.join("\n"))
-    }
-
     /// Execute organize plans (dry-run supported)
     pub fn execute(&self, plans: &[OrganizePlan], dry_run: bool) -> Vec<String> {
         let mut actions = Vec::new();
@@ -273,21 +222,15 @@ impl Organizer {
 
             // Download images
             for (idx, url) in plan.image_urls.iter().enumerate() {
-                let img_name = if idx == 0 { "poster" } else { "fanart" };
-                let ext = if url.contains(".png") { "png" } else { "jpg" };
-                let img_path = plan.target.parent().unwrap_or(Path::new(".")).join(format!("{img_name}.{ext}"));
+                let img_dir = plan.target.parent().unwrap_or(Path::new("."));
+                let img_path = image_scraper::build_image_path(img_dir, idx, url);
 
                 if dry_run {
-                    actions.push(format!("[dry-run] download {img_name} from {url}"));
+                    actions.push(format!("[dry-run] download image from {url}"));
                 } else if let Some(ref client) = img_client {
-                    if let Ok(resp) = client.get(url).send() {
-                        if let Ok(bytes) = resp.bytes() {
-                            if let Err(e) = std::fs::write(&img_path, &bytes) {
-                                actions.push(format!("[error] write image {}: {e}", img_path.display()));
-                            } else {
-                                actions.push(format!("[image] {}", img_path.display()));
-                            }
-                        }
+                    match image_scraper::download(client, url, &img_path) {
+                        Ok(()) => actions.push(format!("[image] {}", img_path.display())),
+                        Err(e) => actions.push(format!("[error] {e}")),
                     }
                 }
             }

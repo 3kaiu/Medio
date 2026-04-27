@@ -54,7 +54,7 @@ pub fn run(path: &str, config: &AppConfig, mode: &str, with_nfo: bool, with_imag
 
     for item in items.iter_mut() {
         if let Some(parsed) = &item.parsed {
-            let parent_dirs = collect_parent_dirs(&item.path, 3);
+            let parent_dirs = ContextInfer::collect_parent_dirs(&item.path, 3);
             let inferred = ContextInfer::infer(parsed, &parent_dirs);
             item.parsed = Some(inferred);
         }
@@ -85,10 +85,12 @@ pub fn run(path: &str, config: &AppConfig, mode: &str, with_nfo: bool, with_imag
 
         let is_dry = dry_run || config.general.dry_run;
         if !is_dry && config.general.confirm {
-            println!("\n{} files will be renamed. Proceed? [y/N]", plans.len());
-            let mut input = String::new();
-            std::io::stdin().read_line(&mut input).ok();
-            if input.trim().to_lowercase() != "y" {
+            if !dialoguer::Confirm::new()
+                .with_prompt(format!("{} files will be renamed. Proceed?", plans.len()))
+                .default(false)
+                .interact()
+                .unwrap_or(false)
+            {
                 println!("Aborted.");
                 return;
             }
@@ -128,10 +130,12 @@ pub fn run(path: &str, config: &AppConfig, mode: &str, with_nfo: bool, with_imag
     // Step 4: Execute
     let is_dry = dry_run || config.general.dry_run;
     if !is_dry && config.general.confirm {
-        println!("\n{} organize actions will be applied. Proceed? [y/N]", plans.len());
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input).ok();
-        if input.trim().to_lowercase() != "y" {
+        if !dialoguer::Confirm::new()
+            .with_prompt(format!("{} organize actions will be applied. Proceed?", plans.len()))
+            .default(false)
+            .interact()
+            .unwrap_or(false)
+        {
             println!("Aborted.");
             return;
         }
@@ -145,16 +149,6 @@ pub fn run(path: &str, config: &AppConfig, mode: &str, with_nfo: bool, with_imag
     println!("\n{} plans, {} actions.", plans.len(), actions.len());
 }
 
-fn collect_parent_dirs(path: &std::path::Path, max: usize) -> Vec<&std::path::Path> {
-    let mut dirs = Vec::new();
-    let mut current = path.parent();
-    while let Some(dir) = current {
-        if dirs.len() >= max { break; }
-        dirs.push(dir);
-        current = dir.parent();
-    }
-    dirs
-}
 
 fn print_organize_table(plans: &[crate::engine::organizer::OrganizePlan]) {
     use console::style;
@@ -179,21 +173,13 @@ fn print_organize_table(plans: &[crate::engine::organizer::OrganizePlan]) {
         println!(
             "  {:<10} {} → {}/  {}",
             action,
-            truncate(&src_name, 35),
-            truncate(&tgt_dir, 35),
+            super::truncate(&src_name, 35),
+            super::truncate(&tgt_dir, 35),
             extras.join("+"),
         );
     }
 }
 
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let truncated: String = s.chars().take(max - 1).collect();
-        format!("{truncated}…")
-    }
-}
 
 fn print_rename_table(plans: &[crate::models::media::RenamePlan]) {
     use console::style;
@@ -208,12 +194,12 @@ fn print_rename_table(plans: &[crate::models::media::RenamePlan]) {
     for plan in plans {
         let old_name = plan.old_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
         let new_name = plan.new_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-        println!("  {} → {}", truncate(&old_name, 50), truncate(&new_name, 50));
+        println!("  {} → {}", super::truncate(&old_name, 50), super::truncate(&new_name, 50));
 
         for sub in &plan.subtitle_plans {
             let sub_old = sub.old_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
             let sub_new = sub.new_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-            println!("  {} → {}  (subtitle)", truncate(&sub_old, 48), truncate(&sub_new, 48));
+            println!("  {} → {}  (subtitle)", super::truncate(&sub_old, 48), super::truncate(&sub_new, 48));
         }
     }
 }

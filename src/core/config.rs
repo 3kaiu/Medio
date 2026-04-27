@@ -374,7 +374,6 @@ impl AppConfig {
     }
 
     /// 获取缓存目录路径
-    #[allow(dead_code)]
     pub fn cache_path(&self) -> PathBuf {
         if self.cache.path.as_os_str().is_empty() {
             dirs::config_dir()

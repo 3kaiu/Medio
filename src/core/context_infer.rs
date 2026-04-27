@@ -6,6 +6,18 @@ use std::path::Path;
 pub struct ContextInfer;
 
 impl ContextInfer {
+    /// Collect up to `max` parent directories of a path
+    pub fn collect_parent_dirs(path: &Path, max: usize) -> Vec<&Path> {
+        let mut dirs = Vec::new();
+        let mut current = path.parent();
+        while let Some(dir) = current {
+            if dirs.len() >= max { break; }
+            dirs.push(dir);
+            current = dir.parent();
+        }
+        dirs
+    }
+
     /// Infer missing year/season from parent directory names
     pub fn infer(parsed: &ParsedInfo, parent_dirs: &[&Path]) -> ParsedInfo {
         let mut result = parsed.clone();
