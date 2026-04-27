@@ -152,14 +152,13 @@ impl Deduplicator {
                 dup_items.iter().enumerate().max_by(|a, b| a.1.quality_score.partial_cmp(&b.1.quality_score).unwrap()).map(|(i, _)| i)
             }
             KeepStrategy::Newest => {
-                dup_items
-                    .iter()
-                    .enumerate()
-                    .max_by_key(|(_, d)| {
-                        std::fs::metadata(&items[d.index].path)
-                            .and_then(|meta| meta.modified())
-                            .ok()
-                    })
+                // Pre-fetch modified times to avoid repeated fs::metadata calls
+                let mod_times: Vec<Option<std::time::SystemTime>> = dup_items.iter()
+                    .map(|d| std::fs::metadata(&items[d.index].path).and_then(|m| m.modified()).ok())
+                    .collect();
+                mod_times.iter().enumerate()
+                    .filter(|(_, t)| t.is_some())
+                    .max_by_key(|(_, t)| t.unwrap())
                     .map(|(i, _)| i)
             }
             KeepStrategy::Largest => {

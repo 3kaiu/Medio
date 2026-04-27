@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 /// OpenAI-compatible chat completion client
 /// Supports DeepSeek, Cloudflare Workers AI, and any OpenAI-compatible endpoint
+#[derive(Clone)]
 pub struct OpenAiCompat {
     client: Client,
     url: String,

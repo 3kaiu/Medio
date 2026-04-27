@@ -68,7 +68,7 @@ pub async fn populate_scrape_results(items: &mut [MediaItem], config: &AppConfig
             let ol = ol.clone();
             let fallback_chain = fallback_chain.clone();
             let chinese_priority = chinese_priority;
-            let ai_client = ai_client.as_ref().map(|_| OpenAiCompat::from_config(&config.ai));
+            let ai_client = ai_client.clone();
             let embedding_client = embedding_client.clone();
             async move {
                 let result = scrape_with_fallback(
