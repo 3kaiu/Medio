@@ -18,17 +18,29 @@ impl EmbeddingClient {
             crate::core::types::AiProvider::DeepSeek => (
                 config.deepseek.url.clone(),
                 config.deepseek.key.clone(),
-                if config.embedding_model.is_empty() { config.deepseek.model.clone() } else { config.embedding_model.clone() },
+                if config.embedding_model.is_empty() {
+                    config.deepseek.model.clone()
+                } else {
+                    config.embedding_model.clone()
+                },
             ),
             crate::core::types::AiProvider::Cloudflare => (
                 config.cloudflare.url.clone(),
                 config.cloudflare.api_token.clone(),
-                if config.embedding_model.is_empty() { config.cloudflare.model.clone() } else { config.embedding_model.clone() },
+                if config.embedding_model.is_empty() {
+                    config.cloudflare.model.clone()
+                } else {
+                    config.embedding_model.clone()
+                },
             ),
             crate::core::types::AiProvider::Custom => (
                 config.custom.url.clone(),
                 config.custom.key.clone(),
-                if config.embedding_model.is_empty() { config.custom.model.clone() } else { config.embedding_model.clone() },
+                if config.embedding_model.is_empty() {
+                    config.custom.model.clone()
+                } else {
+                    config.embedding_model.clone()
+                },
             ),
         };
         Self {
@@ -51,7 +63,10 @@ impl EmbeddingClient {
     }
 
     /// Get embedding vectors for multiple texts in a single API call
-    pub async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f64>>, Box<dyn std::error::Error>> {
+    pub async fn embed_batch(
+        &self,
+        texts: &[&str],
+    ) -> Result<Vec<Vec<f64>>, Box<dyn std::error::Error>> {
         if !self.is_configured() {
             return Err("Embedding client not configured".into());
         }
@@ -64,7 +79,8 @@ impl EmbeddingClient {
             input: texts.iter().map(|t| t.to_string()).collect(),
         };
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(&format!("{}/embeddings", self.url.trim_end_matches('/')))
             .header("Authorization", format!("Bearer {}", self.key))
             .header("Content-Type", "application/json")
@@ -87,15 +103,24 @@ impl EmbeddingClient {
 
     /// Re-rank scrape candidates by embedding similarity to the query
     /// Uses a single batch API call for all embeddings (query + candidates)
-    pub async fn rerank(&self, query: &str, candidates: &[ScrapeResult]) -> Result<Vec<(usize, f64)>, Box<dyn std::error::Error>> {
+    pub async fn rerank(
+        &self,
+        query: &str,
+        candidates: &[ScrapeResult],
+    ) -> Result<Vec<(usize, f64)>, Box<dyn std::error::Error>> {
         if !self.is_configured() || candidates.is_empty() {
-            return Ok(candidates.iter().enumerate().map(|(i, _)| (i, 0.0)).collect());
+            return Ok(candidates
+                .iter()
+                .enumerate()
+                .map(|(i, _)| (i, 0.0))
+                .collect());
         }
 
         // Build all texts: [query, candidate_0, candidate_1, ...]
         let mut texts: Vec<String> = vec![query.to_string()];
         for candidate in candidates {
-            texts.push(format!("{} {} {}",
+            texts.push(format!(
+                "{} {} {}",
                 candidate.title,
                 candidate.year.map(|y| y.to_string()).unwrap_or_default(),
                 candidate.overview.as_deref().unwrap_or_default()
@@ -106,7 +131,11 @@ impl EmbeddingClient {
         // Single batch API call
         let embeddings = self.embed_batch(&text_refs).await?;
         if embeddings.is_empty() {
-            return Ok(candidates.iter().enumerate().map(|(i, _)| (i, 0.0)).collect());
+            return Ok(candidates
+                .iter()
+                .enumerate()
+                .map(|(i, _)| (i, 0.0))
+                .collect());
         }
 
         let query_emb = &embeddings[0];

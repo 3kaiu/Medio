@@ -45,7 +45,12 @@ impl FileHasher {
         let mut prefix_unresolved: Vec<usize> = Vec::new();
         for group in &groups {
             for &idx in group {
-                if items[idx].hash.as_ref().and_then(|h| h.prefix_hash).is_none() {
+                if items[idx]
+                    .hash
+                    .as_ref()
+                    .and_then(|h| h.prefix_hash)
+                    .is_none()
+                {
                     prefix_unresolved.push(idx);
                 }
             }
@@ -53,7 +58,10 @@ impl FileHasher {
 
         let mut prefix_results: HashMap<usize, u64> = HashMap::new();
         if !prefix_unresolved.is_empty() {
-            let paths: Vec<&Path> = prefix_unresolved.iter().map(|&i| items[i].path.as_path()).collect();
+            let paths: Vec<&Path> = prefix_unresolved
+                .iter()
+                .map(|&i| items[i].path.as_path())
+                .collect();
             let hashes = Self::prefix_hash(&paths);
             for (j, &idx) in prefix_unresolved.iter().enumerate() {
                 if let Some(h) = hashes[j] {
@@ -97,7 +105,10 @@ impl FileHasher {
 
         let mut full_results: HashMap<usize, u64> = HashMap::new();
         if !full_unresolved.is_empty() {
-            let paths: Vec<&Path> = full_unresolved.iter().map(|&i| items[i].path.as_path()).collect();
+            let paths: Vec<&Path> = full_unresolved
+                .iter()
+                .map(|&i| items[i].path.as_path())
+                .collect();
             let hashes = Self::hash_full_batch(&paths);
             for (j, &idx) in full_unresolved.iter().enumerate() {
                 if let Some(h) = hashes[j] {
@@ -120,7 +131,11 @@ impl FileHasher {
                 .or_else(|| full_results.get(&i).copied());
 
             if prefix_hash.is_some() || full_hash.is_some() {
-                let hash_info = HashInfo { size_hash, prefix_hash, full_hash };
+                let hash_info = HashInfo {
+                    size_hash,
+                    prefix_hash,
+                    full_hash,
+                };
                 if let Some(cache) = cache {
                     let cache_key = Self::cache_key_for_item(item);
                     let _ = cache.set_hash(&cache_key, &hash_info);
@@ -152,7 +167,9 @@ impl FileHasher {
         let mut buf = vec![0u8; 8192];
         loop {
             let n = file.read(&mut buf).ok()?;
-            if n == 0 { break; }
+            if n == 0 {
+                break;
+            }
             hasher.write(&buf[..n]);
         }
         Some(hasher.finish())
@@ -185,7 +202,11 @@ mod tests {
             path: path.to_path_buf(),
             file_size: size,
             media_type: crate::models::media::MediaType::Movie,
-            extension: path.extension().unwrap_or_default().to_string_lossy().to_string(),
+            extension: path
+                .extension()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string(),
             parsed: None,
             quality: None,
             scraped: None,
@@ -211,7 +232,13 @@ mod tests {
 
         let mut items_again = vec![make_item(&file_a), make_item(&file_b)];
         FileHasher::compute_all_with_cache(&mut items_again, Some(&cache));
-        assert_eq!(items_again[0].hash.as_ref().unwrap().full_hash, first_hash.full_hash);
-        assert_eq!(items_again[1].hash.as_ref().unwrap().full_hash, first_hash.full_hash);
+        assert_eq!(
+            items_again[0].hash.as_ref().unwrap().full_hash,
+            first_hash.full_hash
+        );
+        assert_eq!(
+            items_again[1].hash.as_ref().unwrap().full_hash,
+            first_hash.full_hash
+        );
     }
 }

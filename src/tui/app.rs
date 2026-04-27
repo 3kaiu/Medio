@@ -3,8 +3,6 @@ use crate::core::context_infer::ContextInfer;
 use crate::core::hasher::FileHasher;
 use crate::core::identifier::Identifier;
 use crate::core::keyword_filter::KeywordFilter;
-use std::cell::RefCell;
-use std::path::PathBuf;
 use crate::core::scanner::Scanner;
 use crate::db::cache::Cache;
 use crate::engine::deduplicator::{Deduplicator, DuplicateGroup};
@@ -14,6 +12,9 @@ use crate::media::native_probe::NativeProbe;
 use crate::media::probe::MediaProbe;
 use crate::models::media::MediaItem;
 use crate::scraper;
+use std::cell::RefCell;
+#[cfg(test)]
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Tab {
@@ -48,14 +49,17 @@ struct FilteredCache {
     query: String,
     tab: Tab,
     items_len: usize,
-    filtered_items: Vec<(usize, usize)>,  // (original index, selected index)
+    filtered_items: Vec<(usize, usize)>, // (original index, selected index)
 }
 
 impl Default for FilteredCache {
     fn default() -> Self {
         Self {
-            cache_gen: 0, query: String::new(), tab: Tab::Scan,
-            items_len: 0, filtered_items: Vec::new(),
+            cache_gen: 0,
+            query: String::new(),
+            tab: Tab::Scan,
+            items_len: 0,
+            filtered_items: Vec::new(),
         }
     }
 }
@@ -126,11 +130,7 @@ impl App {
 
         // Context inference
         for item in self.items.iter_mut() {
-            if let Some(parsed) = &item.parsed {
-                let parent_dirs = ContextInfer::collect_parent_dirs(&item.path, 3);
-                let inferred = ContextInfer::infer(parsed, &parent_dirs);
-                item.parsed = Some(inferred);
-            }
+            ContextInfer::enrich_item(item);
         }
 
         // Shared scrape path
@@ -260,10 +260,16 @@ impl App {
     pub fn filtered_items(&self) -> Vec<(usize, &MediaItem)> {
         {
             let cache = self.cache.borrow();
-            if cache.cache_gen == self.data_gen && cache.query == self.search_query && cache.tab == Tab::Scan
+            if cache.cache_gen == self.data_gen
+                && cache.query == self.search_query
+                && cache.tab == Tab::Scan
                 && cache.items_len == self.items.len()
             {
-                return cache.filtered_items.iter().map(|&(orig_idx, _)| (orig_idx, &self.items[orig_idx])).collect();
+                return cache
+                    .filtered_items
+                    .iter()
+                    .map(|&(orig_idx, _)| (orig_idx, &self.items[orig_idx]))
+                    .collect();
             }
         }
 
@@ -271,19 +277,36 @@ impl App {
             self.items.iter().enumerate().map(|(i, _)| (i, i)).collect()
         } else {
             let q = self.search_query.to_lowercase();
-            self.items.iter().enumerate()
+            self.items
+                .iter()
+                .enumerate()
                 .filter(|(_, item)| {
-                    let name = item.path.file_name().map(|f| f.to_string_lossy().to_lowercase()).unwrap_or_default();
+                    let name = item
+                        .path
+                        .file_name()
+                        .map(|f| f.to_string_lossy().to_lowercase())
+                        .unwrap_or_default();
                     name.contains(&q)
-                        || item.parsed.as_ref().map(|p| p.raw_title.to_lowercase().contains(&q)).unwrap_or(false)
-                        || item.scraped.as_ref().map(|s| s.title.to_lowercase().contains(&q)).unwrap_or(false)
+                        || item
+                            .parsed
+                            .as_ref()
+                            .map(|p| p.raw_title.to_lowercase().contains(&q))
+                            .unwrap_or(false)
+                        || item
+                            .scraped
+                            .as_ref()
+                            .map(|s| s.title.to_lowercase().contains(&q))
+                            .unwrap_or(false)
                 })
                 .enumerate()
                 .map(|(sel, (orig, _))| (orig, sel))
                 .collect()
         };
 
-        let result: Vec<(usize, &MediaItem)> = indices.iter().map(|&(orig_idx, _)| (orig_idx, &self.items[orig_idx])).collect();
+        let result: Vec<(usize, &MediaItem)> = indices
+            .iter()
+            .map(|&(orig_idx, _)| (orig_idx, &self.items[orig_idx]))
+            .collect();
 
         let mut cache = self.cache.borrow_mut();
         cache.cache_gen = self.data_gen;
@@ -412,7 +435,10 @@ impl App {
                 let renamer = Renamer::new(self.config.rename.clone());
                 let dry_run = self.config.general.dry_run;
                 let actions = renamer.execute(&self.rename_plans, dry_run);
-                let renamed = actions.iter().filter(|a| a.starts_with("[renamed]") || a.starts_with("[dry-run]")).count();
+                let renamed = actions
+                    .iter()
+                    .filter(|a| a.starts_with("[renamed]") || a.starts_with("[dry-run]"))
+                    .count();
                 self.mode = Mode::Normal;
                 self.status_msg = format!("Rename executed: {} actions", renamed);
                 if !dry_run {
@@ -489,7 +515,6 @@ impl App {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -560,8 +585,16 @@ mod tests {
         app.dedup_groups.push(DuplicateGroup {
             content_id: "hash:1".into(),
             items: vec![
-                DuplicateItem { index: 0, quality_score: 10.0, is_keep: true },
-                DuplicateItem { index: 1, quality_score: 5.0, is_keep: false },
+                DuplicateItem {
+                    index: 0,
+                    quality_score: 10.0,
+                    is_keep: true,
+                },
+                DuplicateItem {
+                    index: 1,
+                    quality_score: 5.0,
+                    is_keep: false,
+                },
             ],
         });
 
@@ -579,8 +612,16 @@ mod tests {
         app.dedup_groups.push(DuplicateGroup {
             content_id: "hash:1".into(),
             items: vec![
-                DuplicateItem { index: 0, quality_score: 10.0, is_keep: true },
-                DuplicateItem { index: 1, quality_score: 5.0, is_keep: false },
+                DuplicateItem {
+                    index: 0,
+                    quality_score: 10.0,
+                    is_keep: true,
+                },
+                DuplicateItem {
+                    index: 1,
+                    quality_score: 5.0,
+                    is_keep: false,
+                },
             ],
         });
 

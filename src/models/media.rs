@@ -28,6 +28,12 @@ pub struct MediaItem {
     pub rename_plan: Option<RenamePlan>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScanIndex {
+    pub root: PathBuf,
+    pub items: Vec<MediaItem>,
+}
+
 /// 文件名解析结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParsedInfo {

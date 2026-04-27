@@ -47,6 +47,8 @@ pub struct ScanConfig {
     pub follow_symlinks: bool,
     #[serde(default = "default_exclude_dirs")]
     pub exclude_dirs: Vec<String>,
+    #[serde(default = "default_exclude_path_keywords")]
+    pub exclude_path_keywords: Vec<String>,
     #[serde(default = "default_min_file_size")]
     pub min_file_size: u64,
     #[serde(default)]
@@ -191,19 +193,54 @@ pub struct CacheConfig {
 
 // --- Default functions ---
 
-fn default_true() -> bool { true }
-fn default_log_level() -> String { "info".into() }
-fn default_max_depth() -> usize { 10 }
-fn default_min_file_size() -> u64 { 1_048_576 } // 1MB
+fn default_true() -> bool {
+    true
+}
+fn default_log_level() -> String {
+    "info".into()
+}
+fn default_max_depth() -> usize {
+    10
+}
+fn default_min_file_size() -> u64 {
+    1_048_576
+} // 1MB
 fn default_exclude_dirs() -> Vec<String> {
     vec![
-        ".git".into(), ".DS_Store".into(), "Thumbs.db".into(), "__MACOSX".into(),
-        "Library".into(), ".Trash".into(), ".cache".into(),
-        ".npm".into(), ".cargo".into(), ".rustup".into(),
+        ".git".into(),
+        ".DS_Store".into(),
+        "Thumbs.db".into(),
+        "__MACOSX".into(),
+        "Library".into(),
+        ".Trash".into(),
+        ".cache".into(),
+        ".npm".into(),
+        ".cargo".into(),
+        ".rustup".into(),
         "node_modules".into(),
+        "BDMV".into(),
+        "CERTIFICATE".into(),
+        "STREAM".into(),
+        "PLAYLIST".into(),
+        "CLIPINF".into(),
+        "AUXDATA".into(),
+        "BACKUP".into(),
+        "META".into(),
     ]
 }
-fn default_ai_provider() -> AiProvider { AiProvider::DeepSeek }
+fn default_exclude_path_keywords() -> Vec<String> {
+    vec![
+        "/BDMV/".into(),
+        "/CERTIFICATE/".into(),
+        "/SAMPLE/".into(),
+        "/sample/".into(),
+        "/Trailer/".into(),
+        "/trailers/".into(),
+    ]
+}
+fn default_ai_provider() -> AiProvider {
+    AiProvider::DeepSeek
+}
 fn default_deepseek() -> DeepSeekConfig {
     DeepSeekConfig {
         url: default_deepseek_url(),
@@ -211,8 +248,12 @@ fn default_deepseek() -> DeepSeekConfig {
         model: default_deepseek_model(),
     }
 }
-fn default_deepseek_url() -> String { "https://api.deepseek.com/v1".into() }
-fn default_deepseek_model() -> String { "deepseek-chat".into() }
+fn default_deepseek_url() -> String {
+    "https://api.deepseek.com/v1".into()
+}
+fn default_deepseek_model() -> String {
+    "deepseek-chat".into()
+}
 fn default_cloudflare() -> CloudflareConfig {
     CloudflareConfig {
         url: default_cf_url(),
@@ -223,14 +264,30 @@ fn default_cloudflare() -> CloudflareConfig {
 fn default_cf_url() -> String {
     "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai".into()
 }
-fn default_cf_model() -> String { "@cf/meta/llama-3.1-8b-instruct".into() }
-fn default_concurrency() -> usize { 3 }
-fn default_fallback_chain() -> Vec<String> {
-    vec!["local".into(), "tmdb".into(), "musicbrainz".into(), "ai".into(), "guess".into()]
+fn default_cf_model() -> String {
+    "@cf/meta/llama-3.1-8b-instruct".into()
 }
-fn default_hash_algo() -> String { "xxhash".into() }
-fn default_keep_strategy() -> KeepStrategy { KeepStrategy::HighestQuality }
-fn default_dup_action() -> DupAction { DupAction::Trash }
+fn default_concurrency() -> usize {
+    3
+}
+fn default_fallback_chain() -> Vec<String> {
+    vec![
+        "local".into(),
+        "tmdb".into(),
+        "musicbrainz".into(),
+        "ai".into(),
+        "guess".into(),
+    ]
+}
+fn default_hash_algo() -> String {
+    "xxhash".into()
+}
+fn default_keep_strategy() -> KeepStrategy {
+    KeepStrategy::HighestQuality
+}
+fn default_dup_action() -> DupAction {
+    DupAction::Trash
+}
 fn default_movie_template() -> String {
     "{{title}}{{year}} - {{media_suffix}}".into()
 }
@@ -243,13 +300,27 @@ fn default_music_template() -> String {
 fn default_novel_template() -> String {
     "{{author}} - {{title}}".into()
 }
-fn default_organize_mode() -> OrganizeMode { OrganizeMode::Archive }
-fn default_link_mode() -> LinkMode { LinkMode::None }
-fn default_res_weight() -> f64 { 0.4 }
-fn default_codec_weight() -> f64 { 0.3 }
-fn default_bitrate_weight() -> f64 { 0.2 }
-fn default_audio_weight() -> f64 { 0.1 }
-fn default_ttl() -> u64 { 90 }
+fn default_organize_mode() -> OrganizeMode {
+    OrganizeMode::Archive
+}
+fn default_link_mode() -> LinkMode {
+    LinkMode::None
+}
+fn default_res_weight() -> f64 {
+    0.4
+}
+fn default_codec_weight() -> f64 {
+    0.3
+}
+fn default_bitrate_weight() -> f64 {
+    0.2
+}
+fn default_audio_weight() -> f64 {
+    0.1
+}
+fn default_ttl() -> u64 {
+    90
+}
 
 impl Default for GeneralConfig {
     fn default() -> Self {
@@ -267,6 +338,7 @@ impl Default for ScanConfig {
             max_depth: default_max_depth(),
             follow_symlinks: false,
             exclude_dirs: default_exclude_dirs(),
+            exclude_path_keywords: default_exclude_path_keywords(),
             min_file_size: default_min_file_size(),
             keyword_filter: Vec::new(),
         }
@@ -279,7 +351,11 @@ impl Default for AiConfig {
             provider: default_ai_provider(),
             deepseek: default_deepseek(),
             cloudflare: default_cloudflare(),
-            custom: CustomAiConfig { url: String::new(), key: String::new(), model: String::new() },
+            custom: CustomAiConfig {
+                url: String::new(),
+                key: String::new(),
+                model: String::new(),
+            },
             embedding_provider: default_ai_provider(),
             embedding_model: String::new(),
             concurrency: default_concurrency(),
@@ -287,7 +363,12 @@ impl Default for AiConfig {
     }
 }
 impl Default for ApiConfig {
-    fn default() -> Self { Self { tmdb_key: String::new(), musicbrainz_user_agent: String::new() } }
+    fn default() -> Self {
+        Self {
+            tmdb_key: String::new(),
+            musicbrainz_user_agent: String::new(),
+        }
+    }
 }
 impl Default for ScrapeConfig {
     fn default() -> Self {
@@ -345,7 +426,12 @@ impl Default for QualityConfig {
     }
 }
 impl Default for CacheConfig {
-    fn default() -> Self { Self { path: PathBuf::new(), ttl_days: default_ttl() } }
+    fn default() -> Self {
+        Self {
+            path: PathBuf::new(),
+            ttl_days: default_ttl(),
+        }
+    }
 }
 impl Default for AppConfig {
     fn default() -> Self {
@@ -394,7 +480,11 @@ impl AppConfig {
             Ok(config)
         } else {
             let config = AppConfig::default();
-            config.save()?;
+            if let Err(err) = config.save() {
+                if !is_permission_error(&err) {
+                    return Err(err);
+                }
+            }
             Ok(config)
         }
     }
@@ -409,4 +499,10 @@ impl AppConfig {
         std::fs::write(&path, content)?;
         Ok(())
     }
+}
+
+fn is_permission_error(err: &Box<dyn std::error::Error>) -> bool {
+    err.downcast_ref::<std::io::Error>()
+        .map(|io_err| matches!(io_err.kind(), std::io::ErrorKind::PermissionDenied))
+        .unwrap_or(false)
 }

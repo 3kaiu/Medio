@@ -1,4 +1,4 @@
-use crate::models::media::{HashInfo, ScrapeResult};
+use crate::models::media::{HashInfo, ScanIndex, ScrapeResult};
 use serde::{Deserialize, Serialize};
 use sled;
 use std::path::Path;
@@ -64,6 +64,25 @@ impl Cache {
         Ok(())
     }
 
+    // --- Scan index cache ---
+
+    pub fn get_scan_index_entry(&self, root: &str) -> Option<(u64, ScanIndex)> {
+        let full_key = format!("scan:{root}");
+        let bytes = self.db.get(full_key).ok()??;
+        let entry = serde_json::from_slice::<CacheEntry<ScanIndex>>(&bytes).ok()?;
+        Some((entry.updated_at, entry.value))
+    }
+
+    pub fn set_scan_index(&self, root: &str, index: &ScanIndex) -> Result<(), CacheError> {
+        let full_key = format!("scan:{root}");
+        let bytes = serde_json::to_vec(&CacheEntry {
+            updated_at: current_unix_ts(),
+            value: index.clone(),
+        })?;
+        self.db.insert(full_key, bytes)?;
+        Ok(())
+    }
+
     // --- TTL cleanup ---
 
     pub fn cleanup(&self, ttl_days: u64) -> Result<u64, CacheError> {
@@ -124,6 +143,8 @@ fn current_unix_ts() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::media::{MediaItem, MediaType, ScanIndex};
+    use std::path::PathBuf;
 
     #[test]
     fn test_scrape_cache_backward_compatible() {
@@ -153,7 +174,10 @@ mod tests {
             openlibrary_id: None,
         };
 
-        cache.db.insert(full_key, serde_json::to_vec(&payload).unwrap()).unwrap();
+        cache
+            .db
+            .insert(full_key, serde_json::to_vec(&payload).unwrap())
+            .unwrap();
         let loaded = cache.get_scrape(key).unwrap();
         assert_eq!(loaded.title, "Legacy");
     }
@@ -189,5 +213,36 @@ mod tests {
         assert_eq!(removed, 1);
         assert!(cache.db.get("scrape:old").unwrap().is_none());
         assert!(cache.db.get("scrape:new").unwrap().is_some());
+    }
+
+    #[test]
+    fn test_scan_index_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(&dir.path().join("cache.sled")).unwrap();
+        let index = ScanIndex {
+            root: PathBuf::from("/media/demo"),
+            items: vec![MediaItem {
+                id: 1,
+                path: PathBuf::from("/media/demo/show/01.mp4"),
+                file_size: 123,
+                media_type: MediaType::Movie,
+                extension: "mp4".into(),
+                parsed: None,
+                quality: None,
+                scraped: None,
+                hash: None,
+                rename_plan: None,
+            }],
+        };
+
+        cache.set_scan_index("/media/demo", &index).unwrap();
+        let (updated_at, loaded_entry) = cache.get_scan_index_entry("/media/demo").unwrap();
+        assert!(updated_at > 0);
+        assert_eq!(loaded_entry.root, PathBuf::from("/media/demo"));
+        assert_eq!(loaded_entry.items.len(), 1);
+        assert_eq!(
+            loaded_entry.items[0].path,
+            PathBuf::from("/media/demo/show/01.mp4")
+        );
     }
 }

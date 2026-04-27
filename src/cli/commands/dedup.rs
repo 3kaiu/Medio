@@ -3,7 +3,6 @@ use crate::core::context_infer::ContextInfer;
 use crate::core::hasher::FileHasher;
 use crate::core::identifier::Identifier;
 use crate::core::keyword_filter::KeywordFilter;
-use crate::core::scanner::Scanner;
 use crate::db::cache::Cache;
 use crate::engine::deduplicator::Deduplicator;
 use crate::media::ffprobe::FfprobeProbe;
@@ -21,9 +20,8 @@ pub fn run(path: &str, config: &AppConfig, dry_run: bool, json_output: bool, pro
         return;
     }
 
-    // Step 1: Scan
-    let scanner = Scanner::new(config.scan.clone());
-    let mut items = scanner.scan(root);
+    // Step 1: Load scan index or scan live
+    let mut items = super::load_scan_items_or_scan(root, config);
 
     if items.is_empty() {
         println!("No media files found.");
@@ -37,11 +35,7 @@ pub fn run(path: &str, config: &AppConfig, dry_run: bool, json_output: bool, pro
 
     // Step 3: Context inference
     for item in items.iter_mut() {
-        if let Some(parsed) = &item.parsed {
-            let parent_dirs = ContextInfer::collect_parent_dirs(&item.path, 3);
-            let inferred = ContextInfer::infer(parsed, &parent_dirs);
-            item.parsed = Some(inferred);
-        }
+        ContextInfer::enrich_item(item);
     }
 
     // Step 4: Hash
@@ -81,7 +75,8 @@ pub fn run(path: &str, config: &AppConfig, dry_run: bool, json_output: bool, pro
 
     // Print results
     if json_output {
-        let json = serde_json::to_string_pretty(&groups).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"));
+        let json = serde_json::to_string_pretty(&groups)
+            .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"));
         println!("{json}");
     } else {
         print_dedup_table(&groups, &items);
@@ -95,7 +90,10 @@ pub fn run(path: &str, config: &AppConfig, dry_run: bool, json_output: bool, pro
             .map(|group| group.items.iter().filter(|item| !item.is_keep).count())
             .sum::<usize>();
         if !dialoguer::Confirm::new()
-            .with_prompt(format!("{} duplicate files will be removed. Proceed?", pending_actions))
+            .with_prompt(format!(
+                "{} duplicate files will be removed. Proceed?",
+                pending_actions
+            ))
             .default(false)
             .interact()
             .unwrap_or(false)
@@ -106,14 +104,23 @@ pub fn run(path: &str, config: &AppConfig, dry_run: bool, json_output: bool, pro
     }
 
     let rt = tokio::runtime::Runtime::new().unwrap();
-    let actions = rt.block_on(deduplicator.execute(&groups, &items, is_dry)).unwrap_or_else(|e| vec![format!("Error: {e}")]);
+    let actions = rt
+        .block_on(deduplicator.execute(&groups, &items, is_dry))
+        .unwrap_or_else(|e| vec![format!("Error: {e}")]);
 
     for action in &actions {
         println!("{action}");
     }
 
-    let removed = actions.iter().filter(|a| !a.starts_with("[error]") && !a.starts_with("[skip]")).count();
-    println!("\n{} files processed, {} actions taken.", groups.iter().map(|g| g.items.len()).sum::<usize>(), removed);
+    let removed = actions
+        .iter()
+        .filter(|a| !a.starts_with("[error]") && !a.starts_with("[skip]"))
+        .count();
+    println!(
+        "\n{} files processed, {} actions taken.",
+        groups.iter().map(|g| g.items.len()).sum::<usize>(),
+        removed
+    );
 }
 
 fn probe_items(items: &mut [MediaItem], probe: &dyn MediaProbe) {
@@ -124,12 +131,16 @@ fn probe_items(items: &mut [MediaItem], probe: &dyn MediaProbe) {
     });
 }
 
-
 fn print_dedup_table(groups: &[crate::engine::deduplicator::DuplicateGroup], items: &[MediaItem]) {
     use console::style;
 
     for (gi, group) in groups.iter().enumerate() {
-        println!("\n{}", style(format!("Group {} — {}", gi + 1, group.content_id)).bold().yellow());
+        println!(
+            "\n{}",
+            style(format!("Group {} — {}", gi + 1, group.content_id))
+                .bold()
+                .yellow()
+        );
 
         println!(
             "  {}  {}  {}  {}  {}",
@@ -148,7 +159,11 @@ fn print_dedup_table(groups: &[crate::engine::deduplicator::DuplicateGroup], ite
             } else {
                 "—".into()
             };
-            let quality = item.quality.as_ref().map(|q| q.resolution_label.clone()).unwrap_or_default();
+            let quality = item
+                .quality
+                .as_ref()
+                .map(|q| q.resolution_label.clone())
+                .unwrap_or_default();
 
             println!(
                 "  {:<10} {:<50} {:<10} {:<10} {}",

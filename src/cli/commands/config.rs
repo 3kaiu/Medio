@@ -83,7 +83,11 @@ pub fn run_init(config_path: &PathBuf) {
     println!("   Record file operations to a local log file");
     let op_log = prompt_input(&format!(
         "   Enable operation log? [Y/n] (current: {}): ",
-        if config.general.operation_log { "on" } else { "off" }
+        if config.general.operation_log {
+            "on"
+        } else {
+            "off"
+        }
     ));
     match op_log.to_lowercase().as_str() {
         "" | "y" | "yes" => config.general.operation_log = true,

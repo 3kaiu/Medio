@@ -1,8 +1,8 @@
-pub mod tmdb;
+pub mod image_scraper;
+pub mod local;
 pub mod musicbrainz;
 pub mod openlibrary;
-pub mod local;
-pub mod image_scraper;
+pub mod tmdb;
 
 use crate::ai::embedding::EmbeddingClient;
 use crate::ai::openai_compat::OpenAiCompat;
@@ -124,17 +124,27 @@ async fn scrape_with_fallback(
 ) -> Option<ScrapeResult> {
     for source in fallback_chain {
         let result = match source.trim().to_ascii_lowercase().as_str() {
-            "local" => {
-                local::find_nfo(path).and_then(|nfo_path| local::read_nfo(&nfo_path))
-            }
+            "local" => local::find_nfo(path).and_then(|nfo_path| local::read_nfo(&nfo_path)),
             "tmdb" => {
                 if matches!(media_type, MediaType::Movie | MediaType::TvShow) {
                     if let Some(parsed) = parsed.as_ref() {
-                        let lang = if chinese_priority { Some("zh-CN") } else { None };
+                        let lang = if chinese_priority {
+                            Some("zh-CN")
+                        } else {
+                            None
+                        };
                         // Fetch multiple candidates for embedding reranking
                         let candidates = match media_type {
-                            MediaType::Movie => tmdb.search_movie_candidates(&parsed.raw_title, parsed.year, lang, 5).await.ok().unwrap_or_default(),
-                            MediaType::TvShow => tmdb.search_tv_candidates(&parsed.raw_title, parsed.year, lang, 5).await.ok().unwrap_or_default(),
+                            MediaType::Movie => tmdb
+                                .search_movie_candidates(&parsed.raw_title, parsed.year, lang, 5)
+                                .await
+                                .ok()
+                                .unwrap_or_default(),
+                            MediaType::TvShow => tmdb
+                                .search_tv_candidates(&parsed.raw_title, parsed.year, lang, 5)
+                                .await
+                                .ok()
+                                .unwrap_or_default(),
                             _ => Vec::new(),
                         };
                         let selected = if candidates.len() == 1 {
@@ -142,8 +152,14 @@ async fn scrape_with_fallback(
                         } else if candidates.len() > 1 {
                             // Use embedding reranking if configured
                             if embedding_client.is_configured() {
-                                let query = format!("{} {}", parsed.raw_title, parsed.year.map(|y| y.to_string()).unwrap_or_default());
-                                if let Ok(ranked) = embedding_client.rerank(&query, &candidates).await {
+                                let query = format!(
+                                    "{} {}",
+                                    parsed.raw_title,
+                                    parsed.year.map(|y| y.to_string()).unwrap_or_default()
+                                );
+                                if let Ok(ranked) =
+                                    embedding_client.rerank(&query, &candidates).await
+                                {
                                     if let Some((best_idx, _)) = ranked.first() {
                                         candidates.get(*best_idx).cloned()
                                     } else {
@@ -161,16 +177,20 @@ async fn scrape_with_fallback(
 
                         if media_type == MediaType::TvShow {
                             if let Some(base) = selected {
-                                if let (Some(season), Some(episode)) = (parsed.season, parsed.episode) {
+                                if let (Some(season), Some(episode)) =
+                                    (parsed.season, parsed.episode)
+                                {
                                     if let Some(tmdb_id) = base.tmdb_id {
-                                        if let Ok(Some(ep_result)) =
-                                            tmdb.get_episode_with_lang(tmdb_id, season, episode, lang).await
+                                        if let Ok(Some(ep_result)) = tmdb
+                                            .get_episode_with_lang(tmdb_id, season, episode, lang)
+                                            .await
                                         {
                                             let mut merged = base;
                                             merged.season_number = ep_result.season_number;
                                             merged.episode_number = ep_result.episode_number;
                                             merged.episode_name = ep_result.episode_name;
-                                            merged.poster_url = ep_result.poster_url.or(merged.poster_url);
+                                            merged.poster_url =
+                                                ep_result.poster_url.or(merged.poster_url);
                                             Some(merged)
                                         } else {
                                             Some(base)
@@ -198,7 +218,11 @@ async fn scrape_with_fallback(
                 if matches!(media_type, MediaType::Music) {
                     if let Some(parsed) = parsed.as_ref() {
                         mb.search_recording(
-                            parsed.raw_title.split('.').next().unwrap_or(&parsed.raw_title),
+                            parsed
+                                .raw_title
+                                .split('.')
+                                .next()
+                                .unwrap_or(&parsed.raw_title),
                             &parsed.raw_title,
                         )
                         .await
@@ -224,15 +248,37 @@ async fn scrape_with_fallback(
             }
             "ai" => {
                 if let Some(client) = ai_client {
-                    let filename = path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+                    let filename = path
+                        .file_name()
+                        .map(|f| f.to_string_lossy().to_string())
+                        .unwrap_or_default();
                     if let Some(result) = client.identify(&filename).await.ok().flatten() {
                         // Try to refine title via suggest_title and re-search TMDB
                         if matches!(media_type, MediaType::Movie | MediaType::TvShow) {
-                            if let Ok(Some(better_title)) = client.suggest_title(&filename, &result.title).await {
-                                let lang = if chinese_priority { Some("zh-CN") } else { None };
+                            if let Ok(Some(better_title)) =
+                                client.suggest_title(&filename, &result.title).await
+                            {
+                                let lang = if chinese_priority {
+                                    Some("zh-CN")
+                                } else {
+                                    None
+                                };
                                 let re_search = match media_type {
-                                    MediaType::Movie => tmdb.search_movie_candidates(&better_title, result.year, lang, 1).await.ok().and_then(|c| c.into_iter().next()),
-                                    MediaType::TvShow => tmdb.search_tv_candidates(&better_title, result.year, lang, 1).await.ok().and_then(|c| c.into_iter().next()),
+                                    MediaType::Movie => tmdb
+                                        .search_movie_candidates(
+                                            &better_title,
+                                            result.year,
+                                            lang,
+                                            1,
+                                        )
+                                        .await
+                                        .ok()
+                                        .and_then(|c| c.into_iter().next()),
+                                    MediaType::TvShow => tmdb
+                                        .search_tv_candidates(&better_title, result.year, lang, 1)
+                                        .await
+                                        .ok()
+                                        .and_then(|c| c.into_iter().next()),
                                     _ => None,
                                 };
                                 if re_search.is_some() {

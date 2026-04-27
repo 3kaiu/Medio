@@ -21,7 +21,8 @@ pub fn run(path: &str, config: &AppConfig, json_output: bool, probe_backend: &st
     // Single file or directory
     let mut items = if target.is_file() {
         let scanner = Scanner::new(config.scan.clone());
-        scanner.scan(target.parent().unwrap_or(Path::new(".")))
+        scanner
+            .scan(target.parent().unwrap_or(Path::new(".")))
             .into_iter()
             .filter(|i| i.path == target)
             .collect()
@@ -41,14 +42,7 @@ pub fn run(path: &str, config: &AppConfig, json_output: bool, probe_backend: &st
     identifier.parse_batch(&mut items);
 
     // Step 2: Context inference
-    {
-        let item = &mut items[0];
-        if let Some(parsed) = &item.parsed {
-            let parent_dirs = ContextInfer::collect_parent_dirs(&item.path, 3);
-            let inferred = ContextInfer::infer(parsed, &parent_dirs);
-            item.parsed = Some(inferred);
-        }
-    }
+    ContextInfer::enrich_item(&mut items[0]);
 
     // Step 3: Hash
     let cache = Cache::open(&config.cache_path()).ok();
@@ -89,13 +83,13 @@ pub fn run(path: &str, config: &AppConfig, json_output: bool, probe_backend: &st
     // Output
     let item = &items[0];
     if json_output {
-        let json = serde_json::to_string_pretty(&item).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"));
+        let json = serde_json::to_string_pretty(&item)
+            .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"));
         println!("{json}");
     } else {
         print_analysis(item);
     }
 }
-
 
 fn print_analysis(item: &crate::models::media::MediaItem) {
     use console::style;
@@ -114,20 +108,36 @@ fn print_analysis(item: &crate::models::media::MediaItem) {
     if let Some(parsed) = &item.parsed {
         println!("{}", style("Parsed").bold().yellow());
         println!("  Title:        {}", parsed.raw_title);
-        if let Some(y) = parsed.year { println!("  Year:         {y}"); }
-        if let Some(s) = parsed.season { println!("  Season:       {s}"); }
-        if let Some(e) = parsed.episode { println!("  Episode:      {e}"); }
-        if let Some(r) = &parsed.resolution { println!("  Resolution:   {r}"); }
-        if let Some(c) = &parsed.codec { println!("  Codec:        {c}"); }
-        if let Some(g) = &parsed.release_group { println!("  Release:      {g}"); }
+        if let Some(y) = parsed.year {
+            println!("  Year:         {y}");
+        }
+        if let Some(s) = parsed.season {
+            println!("  Season:       {s}");
+        }
+        if let Some(e) = parsed.episode {
+            println!("  Episode:      {e}");
+        }
+        if let Some(r) = &parsed.resolution {
+            println!("  Resolution:   {r}");
+        }
+        if let Some(c) = &parsed.codec {
+            println!("  Codec:        {c}");
+        }
+        if let Some(g) = &parsed.release_group {
+            println!("  Release:      {g}");
+        }
         println!();
     }
 
     // Hash info
     if let Some(hash) = &item.hash {
         println!("{}", style("Hash").bold().yellow());
-        if let Some(p) = hash.prefix_hash { println!("  Prefix: {p:016x}"); }
-        if let Some(f) = hash.full_hash { println!("  Full:   {f:016x}"); }
+        if let Some(p) = hash.prefix_hash {
+            println!("  Prefix: {p:016x}");
+        }
+        if let Some(f) = hash.full_hash {
+            println!("  Full:   {f:016x}");
+        }
         println!();
     }
 
@@ -135,11 +145,21 @@ fn print_analysis(item: &crate::models::media::MediaItem) {
     if let Some(q) = &item.quality {
         println!("{}", style("Quality").bold().yellow());
         println!("  Resolution:   {}", q.resolution_label);
-        if let Some(w) = q.width { println!("  Width:        {w}"); }
-        if let Some(h) = q.height { println!("  Height:       {h}"); }
-        if let Some(vc) = &q.video_codec { println!("  Video Codec:  {vc}"); }
-        if let Some(ac) = &q.audio_codec { println!("  Audio Codec:  {ac}"); }
-        if let Some(d) = q.duration_secs { println!("  Duration:     {}s", d); }
+        if let Some(w) = q.width {
+            println!("  Width:        {w}");
+        }
+        if let Some(h) = q.height {
+            println!("  Height:       {h}");
+        }
+        if let Some(vc) = &q.video_codec {
+            println!("  Video Codec:  {vc}");
+        }
+        if let Some(ac) = &q.audio_codec {
+            println!("  Audio Codec:  {ac}");
+        }
+        if let Some(d) = q.duration_secs {
+            println!("  Duration:     {}s", d);
+        }
         println!("  Score:        {:.1}", q.quality_score);
         println!();
     }
@@ -149,12 +169,24 @@ fn print_analysis(item: &crate::models::media::MediaItem) {
         println!("{}", style("Scraped").bold().green());
         println!("  Source:       {:?}", s.source);
         println!("  Title:        {}", s.title);
-        if let Some(y) = s.year { println!("  Year:         {y}"); }
-        if let Some(r) = s.rating { println!("  Rating:       {r:.1}"); }
-        if let Some(en) = &s.episode_name { println!("  Episode:      {en}"); }
-        if let Some(a) = &s.artist { println!("  Artist:       {a}"); }
-        if let Some(al) = &s.album { println!("  Album:        {al}"); }
-        if let Some(au) = &s.author { println!("  Author:       {au}"); }
+        if let Some(y) = s.year {
+            println!("  Year:         {y}");
+        }
+        if let Some(r) = s.rating {
+            println!("  Rating:       {r:.1}");
+        }
+        if let Some(en) = &s.episode_name {
+            println!("  Episode:      {en}");
+        }
+        if let Some(a) = &s.artist {
+            println!("  Artist:       {a}");
+        }
+        if let Some(al) = &s.album {
+            println!("  Album:        {al}");
+        }
+        if let Some(au) = &s.author {
+            println!("  Author:       {au}");
+        }
         println!();
     } else {
         println!("{}", style("Scraped: — (no metadata found)").dim());

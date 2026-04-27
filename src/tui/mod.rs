@@ -1,7 +1,7 @@
 pub mod app;
-pub mod ui;
 pub mod event;
 pub mod tree_view;
+pub mod ui;
 
 /// Truncate a string to max characters, appending … if truncated
 pub fn truncate_str(s: &str, max: usize) -> String {

@@ -24,7 +24,11 @@ impl MusicBrainzScraper {
     }
 
     /// Search recording by artist + title
-    pub async fn search_recording(&self, artist: &str, title: &str) -> Result<Option<ScrapeResult>, Box<dyn std::error::Error>> {
+    pub async fn search_recording(
+        &self,
+        artist: &str,
+        title: &str,
+    ) -> Result<Option<ScrapeResult>, Box<dyn std::error::Error>> {
         if !self.is_configured() {
             return Ok(None);
         }
@@ -36,7 +40,8 @@ impl MusicBrainzScraper {
             crate::scraper::tmdb::urlencoding::encode(&query)
         );
 
-        let resp = self.client
+        let resp = self
+            .client
             .get(&url)
             .header("User-Agent", &self.user_agent)
             .send()
@@ -49,14 +54,20 @@ impl MusicBrainzScraper {
             None => return Ok(None),
         };
 
-        let artist_name = first.artist_credit.first().map(|a| a.name.clone()).unwrap_or_default();
+        let artist_name = first
+            .artist_credit
+            .first()
+            .map(|a| a.name.clone())
+            .unwrap_or_default();
         let release = first.releases.first();
 
         Ok(Some(ScrapeResult {
             source: ScrapeSource::MusicBrainz,
             title: first.title.clone(),
             title_original: None,
-            year: release.and_then(|r| r.date.as_ref()).and_then(|d| d.get(..4).and_then(|y| y.parse().ok())),
+            year: release
+                .and_then(|r| r.date.as_ref())
+                .and_then(|d| d.get(..4).and_then(|y| y.parse().ok())),
             overview: None,
             rating: None,
             season_number: None,
@@ -77,7 +88,11 @@ impl MusicBrainzScraper {
 
     /// Search release (album) by artist + title
     #[allow(dead_code)]
-    pub async fn search_release(&self, artist: &str, album: &str) -> Result<Option<ScrapeResult>, Box<dyn std::error::Error>> {
+    pub async fn search_release(
+        &self,
+        artist: &str,
+        album: &str,
+    ) -> Result<Option<ScrapeResult>, Box<dyn std::error::Error>> {
         if !self.is_configured() {
             return Ok(None);
         }
@@ -89,7 +104,8 @@ impl MusicBrainzScraper {
             crate::scraper::tmdb::urlencoding::encode(&query)
         );
 
-        let resp = self.client
+        let resp = self
+            .client
             .get(&url)
             .header("User-Agent", &self.user_agent)
             .send()
@@ -102,13 +118,20 @@ impl MusicBrainzScraper {
             None => return Ok(None),
         };
 
-        let artist_name = first.artist_credit.first().map(|a| a.name.clone()).unwrap_or_default();
+        let artist_name = first
+            .artist_credit
+            .first()
+            .map(|a| a.name.clone())
+            .unwrap_or_default();
 
         Ok(Some(ScrapeResult {
             source: ScrapeSource::MusicBrainz,
             title: first.title.clone(),
             title_original: None,
-            year: first.date.as_ref().and_then(|d| d.get(..4).and_then(|y| y.parse().ok())),
+            year: first
+                .date
+                .as_ref()
+                .and_then(|d| d.get(..4).and_then(|y| y.parse().ok())),
             overview: None,
             rating: None,
             season_number: None,

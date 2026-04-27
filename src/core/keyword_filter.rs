@@ -10,7 +10,8 @@ impl KeywordFilter {
     pub fn new(keywords: Vec<String>) -> Self {
         let mut all = keywords;
         all.extend(Self::builtin_keywords());
-        let patterns = all.iter()
+        let patterns = all
+            .iter()
             .filter_map(|kw| Regex::new(&format!("(?i){}", regex::escape(kw))).ok())
             .collect();
         Self { patterns }

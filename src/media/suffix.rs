@@ -12,9 +12,8 @@ impl SuffixExtractor {
         let mut parts: Vec<String> = Vec::new();
 
         // Resolution
-        static RE_RES: Lazy<Regex> = Lazy::new(|| {
-            Regex::new(r"(?i)\b(1080[pi]|2160[pi]|720[pi]|4[UK])\b").unwrap()
-        });
+        static RE_RES: Lazy<Regex> =
+            Lazy::new(|| Regex::new(r"(?i)\b(1080[pi]|2160[pi]|720[pi]|4[UK])\b").unwrap());
         if let Some(c) = RE_RES.captures(filename).and_then(|c| c.get(1)) {
             parts.push(c.as_str().to_uppercase());
         }
@@ -28,9 +27,8 @@ impl SuffixExtractor {
         }
 
         // Video codec
-        static RE_CODEC: Lazy<Regex> = Lazy::new(|| {
-            Regex::new(r"(?i)\b(H\.?26[45]|HEVC|AV1|x26[45]|x264)\b").unwrap()
-        });
+        static RE_CODEC: Lazy<Regex> =
+            Lazy::new(|| Regex::new(r"(?i)\b(H\.?26[45]|HEVC|AV1|x26[45]|x264)\b").unwrap());
         if let Some(c) = RE_CODEC.captures(filename).and_then(|c| c.get(1)) {
             let s = c.as_str();
             let upper = s.to_uppercase();
@@ -42,15 +40,15 @@ impl SuffixExtractor {
         }
 
         // Audio codec
-        static RE_AUDIO: Lazy<Regex> = Lazy::new(|| {
-            Regex::new(r"(?i)\b(AAC|FLAC|DTS|Atmos|DD5\.?1)\b").unwrap()
-        });
+        static RE_AUDIO: Lazy<Regex> =
+            Lazy::new(|| Regex::new(r"(?i)\b(AAC|FLAC|DTS|Atmos|DD5\.?1)\b").unwrap());
         if let Some(c) = RE_AUDIO.captures(filename).and_then(|c| c.get(1)) {
             parts.push(c.as_str().to_string());
         }
 
         // Release group (trailing -XXX)
-        static RE_GROUP: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)-([A-Za-z0-9]+)\.\w+$").unwrap());
+        static RE_GROUP: Lazy<Regex> =
+            Lazy::new(|| Regex::new(r"(?i)-([A-Za-z0-9]+)\.\w+$").unwrap());
         if let Some(c) = RE_GROUP.captures(filename).and_then(|c| c.get(1)) {
             parts.push(c.as_str().to_string());
         }

@@ -14,7 +14,10 @@ impl Renamer {
 
     /// Generate rename plans for all items
     pub fn plan(&self, items: &[MediaItem]) -> Vec<RenamePlan> {
-        items.iter().filter_map(|item| self.plan_one(item)).collect()
+        items
+            .iter()
+            .filter_map(|item| self.plan_one(item))
+            .collect()
     }
 
     fn plan_one(&self, item: &MediaItem) -> Option<RenamePlan> {
@@ -22,7 +25,10 @@ impl Renamer {
         let new_name = self.render_template(&template, item)?;
         let old_path = item.path.clone();
         let parent = old_path.parent()?;
-        let ext = old_path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+        let ext = old_path
+            .extension()
+            .map(|e| format!(".{}", e.to_string_lossy()))
+            .unwrap_or_default();
         let new_path = parent.join(format!("{new_name}{ext}"));
 
         if old_path == new_path {
@@ -46,9 +52,7 @@ impl Renamer {
     fn template_for(&self, item: &MediaItem) -> String {
         match item.media_type {
             crate::models::media::MediaType::Movie => self.config.movie_template.clone(),
-            crate::models::media::MediaType::TvShow => {
-                self.config.tv_template.clone()
-            }
+            crate::models::media::MediaType::TvShow => self.config.tv_template.clone(),
             crate::models::media::MediaType::Music => self.config.music_template.clone(),
             crate::models::media::MediaType::Novel => self.config.novel_template.clone(),
             crate::models::media::MediaType::Strm => self.config.tv_template.clone(),
@@ -66,11 +70,19 @@ impl Renamer {
         if let Some(p) = &item.parsed {
             ctx.insert("title", p.raw_title.clone());
             ctx.insert("year", p.year.map(|y| y.to_string()).unwrap_or_default());
-            ctx.insert("season", p.season.map(|s| {
-                let adjusted = (s as i32 + season_offset).max(0) as u32;
-                format!("{adjusted:02}")
-            }).unwrap_or_default());
-            ctx.insert("episode", p.episode.map(|e| format!("{e:02}")).unwrap_or_default());
+            ctx.insert(
+                "season",
+                p.season
+                    .map(|s| {
+                        let adjusted = (s as i32 + season_offset).max(0) as u32;
+                        format!("{adjusted:02}")
+                    })
+                    .unwrap_or_default(),
+            );
+            ctx.insert(
+                "episode",
+                p.episode.map(|e| format!("{e:02}")).unwrap_or_default(),
+            );
             ctx.insert("resolution", p.resolution.clone().unwrap_or_default());
             ctx.insert("codec", p.codec.clone().unwrap_or_default());
             ctx.insert("source", p.source.clone().unwrap_or_default());
@@ -81,7 +93,12 @@ impl Renamer {
         // Scraped info overrides parsed values when available.
         if let Some(s) = &item.scraped {
             ctx.insert("title", s.title.clone());
-            ctx.insert("year", s.year.map(|y| y.to_string()).unwrap_or_else(|| ctx.get("year").cloned().unwrap_or_default()));
+            ctx.insert(
+                "year",
+                s.year
+                    .map(|y| y.to_string())
+                    .unwrap_or_else(|| ctx.get("year").cloned().unwrap_or_default()),
+            );
             ctx.insert(
                 "season",
                 s.season_number
@@ -120,15 +137,26 @@ impl Renamer {
         }
 
         // Pre-compiled cleanup regexes
-        static RE_UNRESOLVED: Lazy<regex::Regex> = Lazy::new(|| regex::Regex::new(r"\{\{[^}]+\}\}").unwrap());
-        static RE_EMPTY_PAREN: Lazy<regex::Regex> = Lazy::new(|| regex::Regex::new(r"\(\s*\)").unwrap());
-        static RE_EMPTY_BRACKET: Lazy<regex::Regex> = Lazy::new(|| regex::Regex::new(r"\[\s*\]").unwrap());
-        static RE_MULTI_SPACE: Lazy<regex::Regex> = Lazy::new(|| regex::Regex::new(r"  +").unwrap());
-        static RE_DASH_NORMALIZE: Lazy<regex::Regex> = Lazy::new(|| regex::Regex::new(r"\s+-\s+").unwrap());
-        static RE_DASH_TRAIL: Lazy<regex::Regex> = Lazy::new(|| regex::Regex::new(r"\s+-\s*$").unwrap());
-        static RE_DASH_LEAD: Lazy<regex::Regex> = Lazy::new(|| regex::Regex::new(r"^\s*-\s+").unwrap());
-        static RE_TRAIL_JUNK: Lazy<regex::Regex> = Lazy::new(|| regex::Regex::new(r"[\s.]+$").unwrap());
-        static RE_LEAD_JUNK: Lazy<regex::Regex> = Lazy::new(|| regex::Regex::new(r"^[\s.]+").unwrap());
+        static RE_UNRESOLVED: Lazy<regex::Regex> =
+            Lazy::new(|| regex::Regex::new(r"\{\{[^}]+\}\}").unwrap());
+        static RE_EMPTY_PAREN: Lazy<regex::Regex> =
+            Lazy::new(|| regex::Regex::new(r"\(\s*\)").unwrap());
+        static RE_EMPTY_BRACKET: Lazy<regex::Regex> =
+            Lazy::new(|| regex::Regex::new(r"\[\s*\]").unwrap());
+        static RE_MULTI_SPACE: Lazy<regex::Regex> =
+            Lazy::new(|| regex::Regex::new(r"  +").unwrap());
+        static RE_DASH_NORMALIZE: Lazy<regex::Regex> =
+            Lazy::new(|| regex::Regex::new(r"\s+-\s+").unwrap());
+        static RE_DASH_TRAIL: Lazy<regex::Regex> =
+            Lazy::new(|| regex::Regex::new(r"\s+-\s*$").unwrap());
+        static RE_DASH_LEAD: Lazy<regex::Regex> =
+            Lazy::new(|| regex::Regex::new(r"^\s*-\s+").unwrap());
+        static RE_EMPTY_SEASON_EP: Lazy<regex::Regex> =
+            Lazy::new(|| regex::Regex::new(r"(^|[^A-Za-z0-9])S(E\d{2}\b)").unwrap());
+        static RE_TRAIL_JUNK: Lazy<regex::Regex> =
+            Lazy::new(|| regex::Regex::new(r"[\s.]+$").unwrap());
+        static RE_LEAD_JUNK: Lazy<regex::Regex> =
+            Lazy::new(|| regex::Regex::new(r"^[\s.]+").unwrap());
 
         // Clean up unresolved placeholders
         result = RE_UNRESOLVED.replace_all(&result, "").to_string();
@@ -145,6 +173,8 @@ impl Renamer {
             result = RE_DASH_LEAD.replace_all(&result, "").to_string();
             result = RE_MULTI_SPACE.replace_all(&result, " ").to_string();
         }
+
+        result = RE_EMPTY_SEASON_EP.replace_all(&result, "$1$2").to_string();
 
         // Clean up double dots, trailing/leading dots/spaces
         result = result.replace("..", ".").trim().to_string();
@@ -174,16 +204,28 @@ impl Renamer {
         if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+                let ext = path
+                    .extension()
+                    .map(|e| e.to_string_lossy().to_lowercase())
+                    .unwrap_or_default();
                 if !subtitle_exts.contains(&ext.as_str()) {
                     continue;
                 }
-                let sub_stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+                let sub_stem = path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default();
                 // Match: same stem or stem starts with media stem
-                if sub_stem == stem || sub_stem.starts_with(&format!("{stem}.")) || sub_stem.starts_with(&format!("{stem}-")) {
+                if sub_stem == stem
+                    || sub_stem.starts_with(&format!("{stem}."))
+                    || sub_stem.starts_with(&format!("{stem}-"))
+                {
                     let suffix = &sub_stem[stem.len()..];
                     let new_sub_name = format!("{new_name}{suffix}");
-                    let new_ext = path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+                    let new_ext = path
+                        .extension()
+                        .map(|e| format!(".{}", e.to_string_lossy()))
+                        .unwrap_or_default();
                     let new_path = dir.join(format!("{new_sub_name}{new_ext}"));
                     plans.push(SubtitleRenamePlan {
                         old_path: path,
@@ -202,27 +244,51 @@ impl Renamer {
 
         for plan in plans {
             if dry_run {
-                actions.push(format!("[dry-run] {} → {}", plan.old_path.display(), plan.new_path.display()));
+                actions.push(format!(
+                    "[dry-run] {} → {}",
+                    plan.old_path.display(),
+                    plan.new_path.display()
+                ));
                 for sub in &plan.subtitle_plans {
-                    actions.push(format!("[dry-run] {} → {}", sub.old_path.display(), sub.new_path.display()));
+                    actions.push(format!(
+                        "[dry-run] {} → {}",
+                        sub.old_path.display(),
+                        sub.new_path.display()
+                    ));
                 }
             } else {
                 match std::fs::rename(&plan.old_path, &plan.new_path) {
                     Ok(()) => {
-                        let msg = format!("[renamed] {} → {}", plan.old_path.display(), plan.new_path.display());
+                        let msg = format!(
+                            "[renamed] {} → {}",
+                            plan.old_path.display(),
+                            plan.new_path.display()
+                        );
                         crate::core::oplog::log(&msg);
                         actions.push(msg);
                     }
-                    Err(e) => actions.push(format!("[error] {} → {}: {e}", plan.old_path.display(), plan.new_path.display())),
+                    Err(e) => actions.push(format!(
+                        "[error] {} → {}: {e}",
+                        plan.old_path.display(),
+                        plan.new_path.display()
+                    )),
                 }
                 for sub in &plan.subtitle_plans {
                     match std::fs::rename(&sub.old_path, &sub.new_path) {
                         Ok(()) => {
-                            let msg = format!("[renamed] {} → {}", sub.old_path.display(), sub.new_path.display());
+                            let msg = format!(
+                                "[renamed] {} → {}",
+                                sub.old_path.display(),
+                                sub.new_path.display()
+                            );
                             crate::core::oplog::log(&msg);
                             actions.push(msg);
                         }
-                        Err(e) => actions.push(format!("[error] {} → {}: {e}", sub.old_path.display(), sub.new_path.display())),
+                        Err(e) => actions.push(format!(
+                            "[error] {} → {}: {e}",
+                            sub.old_path.display(),
+                            sub.new_path.display()
+                        )),
                     }
                 }
             }
@@ -236,7 +302,9 @@ impl Renamer {
 mod tests {
     use super::*;
     use crate::core::config::RenameConfig;
-    use crate::models::media::{MediaItem, MediaType, ParsedInfo, ParseSource, ScrapeResult, ScrapeSource};
+    use crate::models::media::{
+        MediaItem, MediaType, ParseSource, ParsedInfo, ScrapeResult, ScrapeSource,
+    };
 
     fn make_config() -> RenameConfig {
         RenameConfig::default()
@@ -294,7 +362,11 @@ mod tests {
         }
     }
 
-    fn with_scraped_title(mut item: MediaItem, scraped_title: &str, year: Option<u16>) -> MediaItem {
+    fn with_scraped_title(
+        mut item: MediaItem,
+        scraped_title: &str,
+        year: Option<u16>,
+    ) -> MediaItem {
         item.scraped = Some(ScrapeResult {
             source: ScrapeSource::Tmdb,
             title: scraped_title.into(),
@@ -319,7 +391,12 @@ mod tests {
         item
     }
 
-    fn with_scraped_episode(mut item: MediaItem, title: &str, season: u32, episode: u32) -> MediaItem {
+    fn with_scraped_episode(
+        mut item: MediaItem,
+        title: &str,
+        season: u32,
+        episode: u32,
+    ) -> MediaItem {
         item.scraped = Some(ScrapeResult {
             source: ScrapeSource::Tmdb,
             title: title.into(),
@@ -350,7 +427,12 @@ mod tests {
         let item = make_movie_item("Inception", Some(2010));
         let plans = renamer.plan(&[item]);
         assert!(!plans.is_empty());
-        let new_name = plans[0].new_path.file_name().unwrap().to_string_lossy().to_string();
+        let new_name = plans[0]
+            .new_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
         assert!(new_name.contains("Inception"));
         assert!(new_name.ends_with(".mp4"));
     }
@@ -361,10 +443,35 @@ mod tests {
         let item = make_tv_item("Breaking Bad", 1, 2);
         let plans = renamer.plan(&[item]);
         assert!(!plans.is_empty());
-        let new_name = plans[0].new_path.file_name().unwrap().to_string_lossy().to_string();
+        let new_name = plans[0]
+            .new_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
         assert!(new_name.contains("Breaking Bad"));
         assert!(new_name.contains("S01"));
         assert!(new_name.contains("E02"));
+    }
+
+    #[test]
+    fn test_tv_template_render_episode_only() {
+        let renamer = Renamer::new(make_config());
+        let mut item = make_tv_item("财阀家的小儿子", 1, 3);
+        if let Some(parsed) = &mut item.parsed {
+            parsed.season = None;
+        }
+        let item = with_scraped_episode(item, "财阀家的小儿子", 0, 3);
+        let plans = renamer.plan(&[item]);
+        assert!(!plans.is_empty());
+        let new_name = plans[0]
+            .new_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        assert!(new_name.contains("E03"));
+        assert!(!new_name.contains("SE03"));
     }
 
     #[test]
@@ -373,7 +480,12 @@ mod tests {
         let item = make_movie_item("Test", None);
         let plans = renamer.plan(&[item]);
         if !plans.is_empty() {
-            let new_name = plans[0].new_path.file_name().unwrap().to_string_lossy().to_string();
+            let new_name = plans[0]
+                .new_path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
             // Should not have dangling " - " or empty parentheses
             assert!(!new_name.contains("()"));
         }
@@ -385,7 +497,12 @@ mod tests {
         let item = make_movie_item("Movie", Some(2024));
         let plans = renamer.plan(&[item]);
         assert!(!plans.is_empty());
-        let new_name = plans[0].new_path.file_name().unwrap().to_string_lossy().to_string();
+        let new_name = plans[0]
+            .new_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
         assert!(new_name.ends_with(".mp4"));
     }
 
@@ -395,7 +512,12 @@ mod tests {
         let item = with_scraped_title(make_movie_item("tt1234567", None), "Inception", Some(2010));
         let plans = renamer.plan(&[item]);
         assert!(!plans.is_empty());
-        let new_name = plans[0].new_path.file_name().unwrap().to_string_lossy().to_string();
+        let new_name = plans[0]
+            .new_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
         assert!(new_name.contains("Inception"));
         assert!(!new_name.contains("tt1234567"));
     }
@@ -408,7 +530,12 @@ mod tests {
         let item = make_movie_item("Inception", Some(2010));
         let plans = renamer.plan(&[item]);
         assert!(!plans.is_empty());
-        let new_name = plans[0].new_path.file_name().unwrap().to_string_lossy().to_string();
+        let new_name = plans[0]
+            .new_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
         assert!(new_name.contains("Inception - 1080P.H.264.mp4"));
     }
 
@@ -420,7 +547,12 @@ mod tests {
         let item = make_movie_item("Inception", Some(2010));
         let plans = renamer.plan(&[item]);
         assert!(!plans.is_empty());
-        let new_name = plans[0].new_path.file_name().unwrap().to_string_lossy().to_string();
+        let new_name = plans[0]
+            .new_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
         assert_eq!(new_name.matches("1080P.H.264").count(), 1);
     }
 
@@ -451,7 +583,12 @@ mod tests {
         let item = with_scraped_episode(make_tv_item("Show", 2, 1), "Show", 2, 1);
         let plans = renamer.plan(&[item]);
         assert!(!plans.is_empty());
-        let new_name = plans[0].new_path.file_name().unwrap().to_string_lossy().to_string();
+        let new_name = plans[0]
+            .new_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
         assert!(new_name.contains("S01E01"));
     }
 }

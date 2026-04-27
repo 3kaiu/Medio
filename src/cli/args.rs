@@ -1,7 +1,11 @@
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "medio", version, about = "Media file manager: rename, deduplicate, organize")]
+#[command(
+    name = "medio",
+    version,
+    about = "Media file manager: rename, deduplicate, organize"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -37,10 +41,14 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Scan and identify media files
+    /// Scan media files and record directory structure
     Scan {
         /// Directory to scan
         path: String,
+
+        /// Parse filenames and infer series context during scan
+        #[arg(long)]
+        process: bool,
 
         /// Also scrape metadata during scan
         #[arg(long)]

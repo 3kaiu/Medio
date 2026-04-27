@@ -1,5 +1,5 @@
 use crate::core::keyword_filter::KeywordFilter;
-use crate::models::media::{MediaItem, MediaType, ParsedInfo, ParseSource};
+use crate::models::media::{MediaItem, MediaType, ParseSource, ParsedInfo};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use std::path::Path;
@@ -38,18 +38,34 @@ impl Identifier {
     pub fn parse_batch(&self, items: &mut [MediaItem]) {
         use rayon::prelude::*;
         items.par_iter_mut().for_each(|item| {
-            let filename = item.path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
-            item.parsed = Some(self.parse(&filename, item.media_type));
+            let filename = item
+                .path
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let parsed = self.parse(&filename, item.media_type);
+            if parsed.season.is_some() || parsed.episode.is_some() {
+                item.media_type = MediaType::TvShow;
+            }
+            item.parsed = Some(parsed);
         });
     }
 
     /// TV pattern: S01E02, 1x02, etc.
     fn try_tv_pattern(&self, cleaned: &str) -> Option<ParsedInfo> {
-        static RE_SE: Lazy<Regex> = Lazy::new(|| {
-            Regex::new(r"(?i)(.+?)[.\s_-]+S(\d{1,2})\s*E(\d{1,3})").unwrap()
+        static RE_SE: Lazy<Regex> =
+            Lazy::new(|| Regex::new(r"(?i)(.+?)[.\s_-]+S(\d{1,2})\s*E(\d{1,3})").unwrap());
+        static RE_X: Lazy<Regex> =
+            Lazy::new(|| Regex::new(r"(?i)(.+?)[.\s_-]+(\d{1,2})x(\d{1,3})").unwrap());
+        static RE_CN_BRACKET: Lazy<Regex> = Lazy::new(|| {
+            Regex::new(r"(?i).*\[([^\[\]]+?)\s*第(\d{1,2})季\].*?\[(\d{1,3})\](?:[.\[\s_-]|$)")
+                .unwrap()
         });
-        static RE_X: Lazy<Regex> = Lazy::new(|| {
-            Regex::new(r"(?i)(.+?)[.\s_-]+(\d{1,2})x(\d{1,3})").unwrap()
+        static RE_EN_BRACKET: Lazy<Regex> = Lazy::new(|| {
+            Regex::new(
+                r"(?i).*\[([^\[\]]+?)\s+(\d{1,2})(?:st|nd|rd|th)\s+Season\].*?\[(\d{1,3})\](?:[.\[\s_-]|$)",
+            )
+            .unwrap()
         });
 
         if let Some(caps) = RE_SE.captures(cleaned) {
@@ -90,14 +106,50 @@ impl Identifier {
             });
         }
 
+        if let Some(caps) = RE_CN_BRACKET.captures(cleaned) {
+            let raw_title = clean_title(caps.get(1)?.as_str());
+            let suffix_start = caps.get(3)?.start();
+            let tags = extract_media_tags(cleaned);
+            let media_suffix = extract_media_suffix_from_tags(&tags, cleaned, suffix_start);
+            return Some(ParsedInfo {
+                raw_title,
+                season: Some(caps.get(2)?.as_str().parse().ok()?),
+                episode: Some(caps.get(3)?.as_str().parse().ok()?),
+                year: extract_year(cleaned),
+                resolution: tags.resolution,
+                codec: tags.codec,
+                source: tags.source,
+                release_group: tags.release_group,
+                media_suffix,
+                parse_source: ParseSource::Regex,
+            });
+        }
+
+        if let Some(caps) = RE_EN_BRACKET.captures(cleaned) {
+            let raw_title = clean_title(caps.get(1)?.as_str());
+            let suffix_start = caps.get(3)?.start();
+            let tags = extract_media_tags(cleaned);
+            let media_suffix = extract_media_suffix_from_tags(&tags, cleaned, suffix_start);
+            return Some(ParsedInfo {
+                raw_title,
+                season: Some(caps.get(2)?.as_str().parse().ok()?),
+                episode: Some(caps.get(3)?.as_str().parse().ok()?),
+                year: extract_year(cleaned),
+                resolution: tags.resolution,
+                codec: tags.codec,
+                source: tags.source,
+                release_group: tags.release_group,
+                media_suffix,
+                parse_source: ParseSource::Regex,
+            });
+        }
+
         None
     }
 
     /// Movie pattern: title + year
     fn try_movie_pattern(&self, cleaned: &str) -> Option<ParsedInfo> {
-        static RE: Lazy<Regex> = Lazy::new(|| {
-            Regex::new(r"(?i)(.+?)[.\s_-]+(\d{4})").unwrap()
-        });
+        static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)(.+?)[.\s_-]+(\d{4})").unwrap());
 
         if let Some(caps) = RE.captures(cleaned) {
             let raw_title = clean_title(caps.get(1)?.as_str());
@@ -174,8 +226,12 @@ fn clean_title(s: &str) -> String {
 }
 
 fn extract_year(s: &str) -> Option<u16> {
-    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)[.\s_-](\d{4})[.\s_-]").unwrap());
-    RE.captures(s).and_then(|c| c.get(1)).and_then(|m| m.as_str().parse().ok())
+    static RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?i)(?:^|[.\s_\-\[\(])(\d{4})(?:$|[.\s_\-\]\)])").unwrap());
+    RE.captures(s)
+        .and_then(|c| c.get(1))
+        .and_then(|m| m.as_str().parse::<u16>().ok())
+        .filter(|year| (1900..=2030).contains(year))
 }
 
 /// Extract all media tags (resolution, codec, source, audio, release_group) in a single regex pass
@@ -230,7 +286,13 @@ fn extract_media_tags(s: &str) -> MediaTags {
         }
     }
 
-    MediaTags { resolution, codec, source, audio, release_group }
+    MediaTags {
+        resolution,
+        codec,
+        source,
+        audio,
+        release_group,
+    }
 }
 
 /// Build media suffix from pre-extracted tags (avoids re-scanning)
@@ -244,11 +306,21 @@ fn extract_media_suffix_from_tags(tags: &MediaTags, s: &str, start: usize) -> Op
     }
 
     let mut parts: Vec<String> = Vec::new();
-    if let Some(r) = &tags.resolution { parts.push(r.clone()); }
-    if let Some(src) = &tags.source { parts.push(src.clone()); }
-    if let Some(c) = &tags.codec { parts.push(c.clone()); }
-    if let Some(a) = &tags.audio { parts.push(a.clone()); }
-    if let Some(g) = &tags.release_group { parts.push(g.clone()); }
+    if let Some(r) = &tags.resolution {
+        parts.push(r.clone());
+    }
+    if let Some(src) = &tags.source {
+        parts.push(src.clone());
+    }
+    if let Some(c) = &tags.codec {
+        parts.push(c.clone());
+    }
+    if let Some(a) = &tags.audio {
+        parts.push(a.clone());
+    }
+    if let Some(g) = &tags.release_group {
+        parts.push(g.clone());
+    }
 
     if parts.is_empty() {
         None
@@ -269,7 +341,10 @@ mod tests {
     #[test]
     fn test_tv_s01e02() {
         let id = make_identifier();
-        let p = id.parse("Breaking.Bad.S01E02.1080p.WEB-DL.x264-CtrlHD.mp4", MediaType::TvShow);
+        let p = id.parse(
+            "Breaking.Bad.S01E02.1080p.WEB-DL.x264-CtrlHD.mp4",
+            MediaType::TvShow,
+        );
         assert_eq!(p.raw_title, "Breaking.Bad");
         assert_eq!(p.season, Some(1));
         assert_eq!(p.episode, Some(2));
@@ -287,9 +362,25 @@ mod tests {
     }
 
     #[test]
+    fn test_tv_cn_bracket_pattern() {
+        let id = make_identifier();
+        let p = id.parse(
+            "[GM-Team][国漫][一人之下 第5季][The Outcast 5th Season][2022][08][AVC][GB][1080P].mp4",
+            MediaType::Movie,
+        );
+        assert_eq!(p.raw_title, "一人之下");
+        assert_eq!(p.season, Some(5));
+        assert_eq!(p.episode, Some(8));
+        assert_eq!(p.year, Some(2022));
+    }
+
+    #[test]
     fn test_movie_year() {
         let id = make_identifier();
-        let p = id.parse("Inception.2010.1080p.BluRay.x264-SPARKS.mkv", MediaType::Movie);
+        let p = id.parse(
+            "Inception.2010.1080p.BluRay.x264-SPARKS.mkv",
+            MediaType::Movie,
+        );
         assert_eq!(p.raw_title, "Inception");
         assert_eq!(p.year, Some(2010));
         assert_eq!(p.resolution, Some("1080P".into()));

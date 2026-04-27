@@ -33,57 +33,65 @@ impl Organizer {
     }
 
     /// Generate organize plans for all items
-    pub fn plan(&self, items: &[MediaItem], mode: OrganizeMode, link: LinkMode) -> Vec<OrganizePlan> {
+    pub fn plan(
+        &self,
+        items: &[MediaItem],
+        mode: OrganizeMode,
+        link: LinkMode,
+    ) -> Vec<OrganizePlan> {
         let root = if self.config.root.as_os_str().is_empty() {
             PathBuf::from(".")
         } else {
             self.config.root.clone()
         };
 
-        items.iter().filter_map(|item| {
-            let target_dir = self.target_dir(item, &root, &mode)?;
-            let filename = item.path.file_name()?.to_os_string();
-            let target = target_dir.join(&filename);
+        items
+            .iter()
+            .filter_map(|item| {
+                let target_dir = self.target_dir(item, &root, &mode)?;
+                let filename = item.path.file_name()?.to_os_string();
+                let target = target_dir.join(&filename);
 
-            // Skip if already in the right place
-            if item.path.parent() == Some(&target_dir) {
-                return None;
-            }
+                // Skip if already in the right place
+                if item.path.parent() == Some(&target_dir) {
+                    return None;
+                }
 
-            let action = match link {
-                LinkMode::None => match mode {
-                    OrganizeMode::Archive | OrganizeMode::Local => OrganizeAction::Move,
-                    OrganizeMode::Rename => OrganizeAction::Move,
-                },
-                LinkMode::Hard => OrganizeAction::HardLink,
-                LinkMode::Sym => OrganizeAction::SymLink,
-            };
+                let action = match link {
+                    LinkMode::None => match mode {
+                        OrganizeMode::Archive | OrganizeMode::Local => OrganizeAction::Move,
+                        OrganizeMode::Rename => OrganizeAction::Move,
+                    },
+                    LinkMode::Hard => OrganizeAction::HardLink,
+                    LinkMode::Sym => OrganizeAction::SymLink,
+                };
 
-            // NFO content
-            let nfo_content = if self.config.with_nfo {
-                nfo_writer::generate(item)
-            } else {
-                None
-            };
+                // NFO content
+                let nfo_content = if self.config.with_nfo {
+                    nfo_writer::generate(item)
+                } else {
+                    None
+                };
 
-            // Image URLs from scraped data
-            let image_urls = if self.config.with_images {
-                item.scraped
-                    .as_ref()
-                    .map(image_scraper::collect_urls)
-                    .unwrap_or_default()
-            } else {
-                Vec::new()
-            };
+                // Image URLs from scraped data
+                let image_urls = if self.config.with_images {
+                    item.scraped
+                        .as_ref()
+                        .map(image_scraper::collect_urls)
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
 
-            Some(OrganizePlan {
-                source: item.path.clone(),
-                target,
-                action,
-                nfo_content,
-                image_urls,
+                Some(OrganizePlan {
+                    source: item.path.clone(),
+                    target,
+                    action,
+                    nfo_content,
+                    image_urls,
+                })
             })
-        }).collect()
+            .collect()
     }
 
     fn target_dir(&self, item: &MediaItem, root: &Path, mode: &OrganizeMode) -> Option<PathBuf> {
@@ -103,9 +111,15 @@ impl Organizer {
                     MediaType::Unknown => "Other",
                 };
 
-                let title = item.scraped.as_ref()
+                let title = item
+                    .scraped
+                    .as_ref()
                     .map(|s| sanitize_filename(&s.title))
-                    .or_else(|| item.parsed.as_ref().map(|p| sanitize_filename(&p.raw_title)))
+                    .or_else(|| {
+                        item.parsed
+                            .as_ref()
+                            .map(|p| sanitize_filename(&p.raw_title))
+                    })
                     .unwrap_or_else(|| "Unknown".into());
 
                 let mut dir = root.join(type_dir).join(&title);
@@ -120,7 +134,10 @@ impl Organizer {
                 // Add artist/album for music
                 if item.media_type == MediaType::Music {
                     if let Some(artist) = item.scraped.as_ref().and_then(|s| s.artist.as_ref()) {
-                        dir = root.join(type_dir).join(sanitize_filename(artist)).join(&title);
+                        dir = root
+                            .join(type_dir)
+                            .join(sanitize_filename(artist))
+                            .join(&title);
                     }
                 }
 
@@ -129,9 +146,15 @@ impl Organizer {
             OrganizeMode::Local => {
                 // Organize within the same parent directory
                 let parent = item.path.parent()?;
-                let title = item.scraped.as_ref()
+                let title = item
+                    .scraped
+                    .as_ref()
                     .map(|s| sanitize_filename(&s.title))
-                    .or_else(|| item.parsed.as_ref().map(|p| sanitize_filename(&p.raw_title)));
+                    .or_else(|| {
+                        item.parsed
+                            .as_ref()
+                            .map(|p| sanitize_filename(&p.raw_title))
+                    });
 
                 if let Some(title) = title {
                     let mut dir = parent.join(&title);
@@ -184,7 +207,11 @@ impl Organizer {
             };
 
             if dry_run {
-                actions.push(format!("[dry-run] {action_label} {} → {}", plan.source.display(), plan.target.display()));
+                actions.push(format!(
+                    "[dry-run] {action_label} {} → {}",
+                    plan.source.display(),
+                    plan.target.display()
+                ));
             } else {
                 let result = match plan.action {
                     OrganizeAction::Move => std::fs::rename(&plan.source, &plan.target),
@@ -200,11 +227,19 @@ impl Organizer {
                 };
                 match result {
                     Ok(()) => {
-                        let msg = format!("[{action_label}] {} → {}", plan.source.display(), plan.target.display());
+                        let msg = format!(
+                            "[{action_label}] {} → {}",
+                            plan.source.display(),
+                            plan.target.display()
+                        );
                         crate::core::oplog::log(&msg);
                         actions.push(msg);
                     }
-                    Err(e) => actions.push(format!("[error] {} → {}: {e}", plan.source.display(), plan.target.display())),
+                    Err(e) => actions.push(format!(
+                        "[error] {} → {}: {e}",
+                        plan.source.display(),
+                        plan.target.display()
+                    )),
                 }
             }
 
@@ -238,11 +273,18 @@ impl Organizer {
 
         // Cleanup empty directories
         if self.config.cleanup_empty_dirs && !dry_run {
-            let mut dirs: Vec<PathBuf> = plans.iter().filter_map(|p| p.source.parent().map(|d| d.to_path_buf())).collect();
+            let mut dirs: Vec<PathBuf> = plans
+                .iter()
+                .filter_map(|p| p.source.parent().map(|d| d.to_path_buf()))
+                .collect();
             dirs.sort();
             dirs.dedup();
             for dir in dirs.iter().rev() {
-                if dir.exists() && std::fs::read_dir(dir).map(|mut d| d.next().is_none()).unwrap_or(false) {
+                if dir.exists()
+                    && std::fs::read_dir(dir)
+                        .map(|mut d| d.next().is_none())
+                        .unwrap_or(false)
+                {
                     if let Ok(()) = std::fs::remove_dir(dir) {
                         actions.push(format!("[cleanup] removed empty dir {}", dir.display()));
                     }
@@ -269,7 +311,9 @@ fn sanitize_filename(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::core::config::OrganizeConfig;
-    use crate::models::media::{MediaItem, MediaType, ParsedInfo, ParseSource, ScrapeResult, ScrapeSource};
+    use crate::models::media::{
+        MediaItem, MediaType, ParseSource, ParsedInfo, ScrapeResult, ScrapeSource,
+    };
 
     fn make_org_config() -> OrganizeConfig {
         OrganizeConfig {

@@ -2,7 +2,6 @@ use crate::core::config::AppConfig;
 use crate::core::context_infer::ContextInfer;
 use crate::core::identifier::Identifier;
 use crate::core::keyword_filter::KeywordFilter;
-use crate::core::scanner::Scanner;
 use crate::engine::renamer::Renamer;
 use crate::scraper;
 use std::path::Path;
@@ -14,9 +13,8 @@ pub fn run(path: &str, config: &AppConfig, dry_run: bool, json_output: bool) {
         return;
     }
 
-    // Step 1: Scan + Identify
-    let scanner = Scanner::new(config.scan.clone());
-    let mut items = scanner.scan(root);
+    // Step 1: Load scan index or scan live
+    let mut items = super::load_scan_items_or_scan(root, config);
 
     if items.is_empty() {
         println!("No media files found.");
@@ -28,11 +26,7 @@ pub fn run(path: &str, config: &AppConfig, dry_run: bool, json_output: bool) {
     identifier.parse_batch(&mut items);
 
     for item in items.iter_mut() {
-        if let Some(parsed) = &item.parsed {
-            let parent_dirs = ContextInfer::collect_parent_dirs(&item.path, 3);
-            let inferred = ContextInfer::infer(parsed, &parent_dirs);
-            item.parsed = Some(inferred);
-        }
+        ContextInfer::enrich_item(item);
     }
 
     // Step 2: Scrape metadata so renaming can use authoritative titles
@@ -52,7 +46,8 @@ pub fn run(path: &str, config: &AppConfig, dry_run: bool, json_output: bool) {
 
     // Output plans
     if json_output {
-        let json = serde_json::to_string_pretty(&plans).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"));
+        let json = serde_json::to_string_pretty(&plans)
+            .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"));
         println!("{json}");
     } else {
         print_rename_table(&plans);
@@ -78,9 +73,12 @@ pub fn run(path: &str, config: &AppConfig, dry_run: bool, json_output: bool) {
         println!("{action}");
     }
 
-    println!("\n{} rename plans generated, {} actions taken.", plans.len(), actions.len());
+    println!(
+        "\n{} rename plans generated, {} actions taken.",
+        plans.len(),
+        actions.len()
+    );
 }
-
 
 fn print_rename_table(plans: &[crate::models::media::RenamePlan]) {
     use console::style;
@@ -93,14 +91,38 @@ fn print_rename_table(plans: &[crate::models::media::RenamePlan]) {
     );
 
     for plan in plans {
-        let old_name = plan.old_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-        let new_name = plan.new_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-        println!("  {} → {}", super::truncate(&old_name, 50), super::truncate(&new_name, 50));
+        let old_name = plan
+            .old_path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let new_name = plan
+            .new_path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        println!(
+            "  {} → {}",
+            super::truncate(&old_name, 50),
+            super::truncate(&new_name, 50)
+        );
 
         for sub in &plan.subtitle_plans {
-            let sub_old = sub.old_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-            let sub_new = sub.new_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-            println!("  {} → {}  (subtitle)", super::truncate(&sub_old, 48), super::truncate(&sub_new, 48));
+            let sub_old = sub
+                .old_path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let sub_new = sub
+                .new_path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            println!(
+                "  {} → {}  (subtitle)",
+                super::truncate(&sub_old, 48),
+                super::truncate(&sub_new, 48)
+            );
         }
     }
 }

@@ -5,13 +5,17 @@ use crate::tui::ui;
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io;
 
 pub fn run(path: &str, config: &AppConfig) {
-    let app_path = if path.is_empty() { ".".into() } else { path.to_string() };
+    let app_path = if path.is_empty() {
+        ".".into()
+    } else {
+        path.to_string()
+    };
     let mut app = App::new(config.clone(), app_path);
 
     // Setup terminal
@@ -32,7 +36,9 @@ pub fn run(path: &str, config: &AppConfig) {
         terminal.draw(|f| ui::draw(f, &app)).unwrap();
         match event::handle_events(&mut app) {
             Ok(running) => {
-                if !running { break; }
+                if !running {
+                    break;
+                }
             }
             Err(_) => break,
         }
@@ -40,6 +46,11 @@ pub fn run(path: &str, config: &AppConfig) {
 
     // Restore terminal
     disable_raw_mode().unwrap();
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture).unwrap();
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )
+    .unwrap();
     terminal.show_cursor().unwrap();
 }

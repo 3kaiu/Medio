@@ -38,8 +38,12 @@ fn main() {
     core::oplog::init(config.general.operation_log);
 
     match cli.command {
-        Commands::Scan { path, with_scrape } => {
-            cli::commands::scan::run(&path, &config, cli.json, with_scrape);
+        Commands::Scan {
+            path,
+            process,
+            with_scrape,
+        } => {
+            cli::commands::scan::run(&path, &config, cli.json, process, with_scrape);
         }
         Commands::Scrape { path } => {
             cli::commands::scrape::run(&path, &config, cli.json);
@@ -52,8 +56,23 @@ fn main() {
             // So actual dry_run = cli.dry_run (from flag, default true)
             cli::commands::dedup::run(&path, &config, cli.dry_run, cli.json, &cli.probe);
         }
-        Commands::Organize { path, mode, with_nfo, with_images, link } => {
-            cli::commands::organize::run(&path, &config, &mode, with_nfo, with_images, &link, cli.dry_run, cli.json);
+        Commands::Organize {
+            path,
+            mode,
+            with_nfo,
+            with_images,
+            link,
+        } => {
+            cli::commands::organize::run(
+                &path,
+                &config,
+                &mode,
+                with_nfo,
+                with_images,
+                &link,
+                cli.dry_run,
+                cli.json,
+            );
         }
         Commands::Analyze { path } => {
             cli::commands::analyze::run(&path, &config, cli.json, &cli.probe);
@@ -76,8 +95,22 @@ fn main() {
                 } else {
                     // Show current config summary
                     let config = AppConfig::load().unwrap_or_default();
-                    println!("  TMDB key: {}", if config.api.tmdb_key.is_empty() { "not set" } else { "configured" });
-                    println!("  MusicBrainz: {}", if config.api.musicbrainz_user_agent.is_empty() { "not set" } else { "configured" });
+                    println!(
+                        "  TMDB key: {}",
+                        if config.api.tmdb_key.is_empty() {
+                            "not set"
+                        } else {
+                            "configured"
+                        }
+                    );
+                    println!(
+                        "  MusicBrainz: {}",
+                        if config.api.musicbrainz_user_agent.is_empty() {
+                            "not set"
+                        } else {
+                            "configured"
+                        }
+                    );
                     println!("  AI provider: {:?}", config.ai.provider);
                     println!("  AI enabled: {}", config.ai.enabled);
                     println!("  Organize mode: {:?}", config.organize.mode);

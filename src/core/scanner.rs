@@ -2,7 +2,7 @@ use crate::core::config::ScanConfig;
 use crate::models::media::{MediaItem, MediaType};
 use ignore::WalkBuilder;
 use indicatif::{ProgressBar, ProgressStyle};
-use std::path::Path;
+use std::path::{Component, Path};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub struct Scanner {
@@ -19,11 +19,14 @@ impl Scanner {
         let id_counter = AtomicU64::new(0);
         let pb = ProgressBar::new(0);
         pb.set_style(
-            ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] {pos} files scanned")
-                .unwrap()
+            ProgressStyle::with_template(
+                "{spinner:.green} [{elapsed_precise}] {pos} files scanned",
+            )
+            .unwrap(),
         );
 
         let exclude_dirs = self.config.exclude_dirs.clone();
+        let exclude_path_keywords = self.config.exclude_path_keywords.clone();
 
         let mut builder = WalkBuilder::new(root);
         builder
@@ -67,6 +70,10 @@ impl Scanner {
                         .map(|e| e.to_string_lossy().to_string())
                         .unwrap_or_default();
 
+                    if should_skip_file(path, &extension, &exclude_path_keywords) {
+                        continue;
+                    }
+
                     let media_type = detect_media_type(&extension);
 
                     // Skip unknown types (not media)
@@ -102,6 +109,47 @@ impl Scanner {
     }
 }
 
+fn should_skip_file(path: &Path, ext: &str, exclude_path_keywords: &[String]) -> bool {
+    let normalized = path.to_string_lossy();
+    if exclude_path_keywords
+        .iter()
+        .any(|keyword| normalized.contains(keyword))
+    {
+        return true;
+    }
+
+    let file_stem = path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy())
+        .unwrap_or_default();
+    let ext = ext.to_ascii_lowercase();
+
+    if matches!(ext.as_str(), "m2ts" | "mts" | "ts") && is_numeric_stem(&file_stem) {
+        return true;
+    }
+
+    if matches!(ext.as_str(), "m2ts" | "mts" | "ts")
+        && path.components().any(|component| match component {
+            Component::Normal(name) => {
+                let name = name.to_string_lossy();
+                matches!(
+                    name.as_ref(),
+                    "BDMV" | "CERTIFICATE" | "STREAM" | "PLAYLIST" | "CLIPINF"
+                )
+            }
+            _ => false,
+        })
+    {
+        return true;
+    }
+
+    false
+}
+
+fn is_numeric_stem(stem: &str) -> bool {
+    !stem.is_empty() && stem.chars().all(|c| c.is_ascii_digit())
+}
+
 /// Detect media type from file extension
 fn detect_media_type(ext: &str) -> MediaType {
     match ext.to_lowercase().as_str() {
@@ -110,13 +158,42 @@ fn detect_media_type(ext: &str) -> MediaType {
             MediaType::Movie // default, identifier will refine
         }
         // Audio
-        "mp3" | "flac" | "wav" | "ogg" | "m4a" | "ape" | "wma" | "aac" | "opus" => {
-            MediaType::Music
-        }
+        "mp3" | "flac" | "wav" | "ogg" | "m4a" | "ape" | "wma" | "aac" | "opus" => MediaType::Music,
         // Novel / Book
         "epub" | "pdf" | "txt" | "mobi" | "azw3" | "djvu" => MediaType::Novel,
         // STRM
         "strm" => MediaType::Strm,
         _ => MediaType::Unknown,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_numeric_stem, should_skip_file};
+    use std::path::Path;
+
+    #[test]
+    fn skips_bluray_stream_paths() {
+        let path = Path::new("/media/Movie/BDMV/STREAM/00001.m2ts");
+        assert!(should_skip_file(path, "m2ts", &[]));
+    }
+
+    #[test]
+    fn skips_numeric_transport_streams() {
+        let path = Path::new("/media/raw/00042.ts");
+        assert!(should_skip_file(path, "ts", &[]));
+        assert!(is_numeric_stem("00042"));
+    }
+
+    #[test]
+    fn keeps_normal_video_files() {
+        let path = Path::new("/media/Show/Season 1/Episode 01.mkv");
+        assert!(!should_skip_file(path, "mkv", &[]));
+    }
+
+    #[test]
+    fn skips_configured_keywords() {
+        let path = Path::new("/media/Movie/sample/demo.mp4");
+        assert!(should_skip_file(path, "mp4", &[String::from("/sample/")]));
     }
 }

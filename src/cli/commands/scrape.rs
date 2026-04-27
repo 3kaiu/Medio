@@ -2,7 +2,6 @@ use crate::core::config::AppConfig;
 use crate::core::context_infer::ContextInfer;
 use crate::core::identifier::Identifier;
 use crate::core::keyword_filter::KeywordFilter;
-use crate::core::scanner::Scanner;
 use crate::models::media::MediaItem;
 use crate::scraper;
 use std::path::Path;
@@ -14,9 +13,8 @@ pub fn run(path: &str, config: &AppConfig, json_output: bool) {
         return;
     }
 
-    // Step 1: Scan + Identify
-    let scanner = Scanner::new(config.scan.clone());
-    let mut items = scanner.scan(root);
+    // Step 1: Load scan index or scan live
+    let mut items = super::load_scan_items_or_scan(root, config);
 
     if items.is_empty() {
         println!("No media files found.");
@@ -28,11 +26,7 @@ pub fn run(path: &str, config: &AppConfig, json_output: bool) {
     identifier.parse_batch(&mut items);
 
     for item in items.iter_mut() {
-        if let Some(parsed) = &item.parsed {
-            let parent_dirs = ContextInfer::collect_parent_dirs(&item.path, 3);
-            let inferred = ContextInfer::infer(parsed, &parent_dirs);
-            item.parsed = Some(inferred);
-        }
+        ContextInfer::enrich_item(item);
     }
 
     // Step 2: Scrape metadata using fallback chain (concurrent)
@@ -43,13 +37,13 @@ pub fn run(path: &str, config: &AppConfig, json_output: bool) {
 
     // Output
     if json_output {
-        let json = serde_json::to_string_pretty(&items).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"));
+        let json = serde_json::to_string_pretty(&items)
+            .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"));
         println!("{json}");
     } else {
         print_scrape_table(&items);
     }
 }
-
 
 fn print_scrape_table(items: &[MediaItem]) {
     use console::style;
@@ -65,7 +59,11 @@ fn print_scrape_table(items: &[MediaItem]) {
 
     for item in items {
         let (scraped_title, source, rating) = if let Some(s) = &item.scraped {
-            (s.title.clone(), format!("{:?}", s.source), s.rating.map(|r| format!("{r:.1}")).unwrap_or_default())
+            (
+                s.title.clone(),
+                format!("{:?}", s.source),
+                s.rating.map(|r| format!("{r:.1}")).unwrap_or_default(),
+            )
         } else {
             ("—".into(), "—".into(), String::new())
         };
@@ -73,7 +71,14 @@ fn print_scrape_table(items: &[MediaItem]) {
         println!(
             "{:<8} {:<40} {:<40} {:<12} {}",
             format!("{:?}", item.media_type),
-            super::truncate(&item.parsed.as_ref().map(|p| p.raw_title.clone()).unwrap_or_default(), 40),
+            super::truncate(
+                &item
+                    .parsed
+                    .as_ref()
+                    .map(|p| p.raw_title.clone())
+                    .unwrap_or_default(),
+                40
+            ),
             super::truncate(&scraped_title, 40),
             source,
             rating,

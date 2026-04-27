@@ -46,7 +46,10 @@ impl OpenAiCompat {
     }
 
     /// Identify media from filename using AI
-    pub async fn identify(&self, filename: &str) -> Result<Option<ScrapeResult>, Box<dyn std::error::Error>> {
+    pub async fn identify(
+        &self,
+        filename: &str,
+    ) -> Result<Option<ScrapeResult>, Box<dyn std::error::Error>> {
         if !self.is_configured() {
             return Ok(None);
         }
@@ -95,7 +98,11 @@ impl OpenAiCompat {
     }
 
     /// Suggest a better title for ambiguous filenames
-    pub async fn suggest_title(&self, filename: &str, current_title: &str) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    pub async fn suggest_title(
+        &self,
+        filename: &str,
+        current_title: &str,
+    ) -> Result<Option<String>, Box<dyn std::error::Error>> {
         if !self.is_configured() {
             return Ok(None);
         }
@@ -121,15 +128,25 @@ impl OpenAiCompat {
         let request = ChatRequest {
             model: self.model.clone(),
             messages: vec![
-                Message { role: "system".into(), content: system.into() },
-                Message { role: "user".into(), content: user.into() },
+                Message {
+                    role: "system".into(),
+                    content: system.into(),
+                },
+                Message {
+                    role: "user".into(),
+                    content: user.into(),
+                },
             ],
             temperature: 0.1,
             max_tokens: 512,
         };
 
-        let resp = self.client
-            .post(&format!("{}/chat/completions", self.url.trim_end_matches('/')))
+        let resp = self
+            .client
+            .post(&format!(
+                "{}/chat/completions",
+                self.url.trim_end_matches('/')
+            ))
             .header("Authorization", format!("Bearer {}", self.key))
             .header("Content-Type", "application/json")
             .json(&request)
@@ -143,7 +160,9 @@ impl OpenAiCompat {
         }
 
         let completion: ChatResponse = resp.json().await?;
-        Ok(completion.choices.first()
+        Ok(completion
+            .choices
+            .first()
             .map(|c| c.message.content.clone())
             .unwrap_or_default())
     }

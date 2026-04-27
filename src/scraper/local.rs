@@ -45,7 +45,10 @@ pub fn read_nfo(nfo_path: &Path) -> Option<ScrapeResult> {
             result.episode_number = val.parse().ok();
         } else if let Some(val) = extract_tag(line, "episodename") {
             result.episode_name = Some(val);
-        } else if extract_tag(line, "title").is_some() && result.episode_number.is_some() && result.episode_name.is_none() {
+        } else if extract_tag(line, "title").is_some()
+            && result.episode_number.is_some()
+            && result.episode_name.is_none()
+        {
             result.episode_name = extract_tag(line, "title");
         } else if let Some(val) = extract_tag(line, "thumb") {
             if result.poster_url.is_none() {
@@ -113,8 +116,14 @@ mod tests {
 
     #[test]
     fn test_extract_tag() {
-        assert_eq!(extract_tag("<title>Inception</title>", "title"), Some("Inception".into()));
-        assert_eq!(extract_tag("<year>2010</year>", "year"), Some("2010".into()));
+        assert_eq!(
+            extract_tag("<title>Inception</title>", "title"),
+            Some("Inception".into())
+        );
+        assert_eq!(
+            extract_tag("<year>2010</year>", "year"),
+            Some("2010".into())
+        );
         assert_eq!(extract_tag("<empty></empty>", "empty"), None);
         assert_eq!(extract_tag("no tag here", "title"), None);
     }

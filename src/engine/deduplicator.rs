@@ -33,7 +33,10 @@ impl Deduplicator {
         // 1. Exact dedup: group by full_hash
         let mut hash_groups: HashMap<u64, Vec<usize>> = HashMap::new();
         for (i, item) in items.iter().enumerate() {
-            if let Some(HashInfo { full_hash: Some(h), .. }) = &item.hash {
+            if let Some(HashInfo {
+                full_hash: Some(h), ..
+            }) = &item.hash
+            {
                 hash_groups.entry(*h).or_default().push(i);
             }
         }
@@ -49,13 +52,19 @@ impl Deduplicator {
         let mut content_groups: HashMap<String, Vec<usize>> = HashMap::new();
         for (i, item) in items.iter().enumerate() {
             let key = if let Some(scraped) = &item.scraped {
-                format!("{}|S{}E{}", scraped.title,
+                format!(
+                    "{}|S{}E{}",
+                    scraped.title,
                     scraped.season_number.unwrap_or(0),
-                    scraped.episode_number.unwrap_or(0))
+                    scraped.episode_number.unwrap_or(0)
+                )
             } else if let Some(parsed) = &item.parsed {
-                format!("{}|S{}E{}", parsed.raw_title,
+                format!(
+                    "{}|S{}E{}",
+                    parsed.raw_title,
                     parsed.season.unwrap_or(0),
-                    parsed.episode.unwrap_or(0))
+                    parsed.episode.unwrap_or(0)
+                )
             } else {
                 continue;
             };
@@ -67,9 +76,10 @@ impl Deduplicator {
                 continue;
             }
             // Skip if already covered by exact dedup
-            let hashes: Vec<Option<u64>> = indices.iter().map(|&i| {
-                items[i].hash.as_ref().and_then(|h| h.full_hash)
-            }).collect();
+            let hashes: Vec<Option<u64>> = indices
+                .iter()
+                .map(|&i| items[i].hash.as_ref().and_then(|h| h.full_hash))
+                .collect();
             let all_same = hashes.windows(2).all(|w| w[0].is_some() && w[0] == w[1]);
             if all_same {
                 continue;
@@ -81,7 +91,12 @@ impl Deduplicator {
     }
 
     /// Execute dedup actions (dry-run supported)
-    pub async fn execute(&self, groups: &[DuplicateGroup], items: &[MediaItem], dry_run: bool) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    pub async fn execute(
+        &self,
+        groups: &[DuplicateGroup],
+        items: &[MediaItem],
+        dry_run: bool,
+    ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         let mut actions: Vec<String> = Vec::new();
 
         for group in groups {
@@ -91,34 +106,50 @@ impl Deduplicator {
                 }
                 let media = &items[item.index];
                 let path = &media.path;
-                let action_desc = format!("REMOVE {} (score: {:.1})", path.display(), item.quality_score);
+                let action_desc = format!(
+                    "REMOVE {} (score: {:.1})",
+                    path.display(),
+                    item.quality_score
+                );
 
                 if dry_run {
                     actions.push(format!("[dry-run] {action_desc}"));
                 } else {
                     match self.config.duplicate_action {
-                        crate::core::types::DupAction::Trash => {
-                            match trash::delete(path) {
-                                Ok(()) => {
-                                    let msg = format!("[trash] {action_desc}");
-                                    crate::core::oplog::log(&msg);
-                                    actions.push(msg);
-                                }
-                                Err(e) => actions.push(format!("[error] failed to trash {}: {e}", path.display())),
+                        crate::core::types::DupAction::Trash => match trash::delete(path) {
+                            Ok(()) => {
+                                let msg = format!("[trash] {action_desc}");
+                                crate::core::oplog::log(&msg);
+                                actions.push(msg);
                             }
-                        }
+                            Err(e) => actions
+                                .push(format!("[error] failed to trash {}: {e}", path.display())),
+                        },
                         crate::core::types::DupAction::Move => {
                             if self.config.move_target.as_os_str().is_empty() {
-                                actions.push(format!("[skip] no move_target configured for {}", path.display()));
+                                actions.push(format!(
+                                    "[skip] no move_target configured for {}",
+                                    path.display()
+                                ));
                             } else {
-                                let dest = self.config.move_target.join(path.file_name().unwrap_or_default());
+                                let dest = self
+                                    .config
+                                    .move_target
+                                    .join(path.file_name().unwrap_or_default());
                                 match std::fs::rename(path, &dest) {
                                     Ok(()) => {
-                                        let msg = format!("[move] {} → {}", path.display(), dest.display());
+                                        let msg = format!(
+                                            "[move] {} → {}",
+                                            path.display(),
+                                            dest.display()
+                                        );
                                         crate::core::oplog::log(&msg);
                                         actions.push(msg);
                                     }
-                                    Err(e) => actions.push(format!("[error] failed to move {}: {e}", path.display())),
+                                    Err(e) => actions.push(format!(
+                                        "[error] failed to move {}: {e}",
+                                        path.display()
+                                    )),
                                 }
                             }
                         }
@@ -133,11 +164,20 @@ impl Deduplicator {
         Ok(actions)
     }
 
-    fn build_group(&self, content_id: &str, indices: &[usize], items: &[MediaItem]) -> DuplicateGroup {
+    fn build_group(
+        &self,
+        content_id: &str,
+        indices: &[usize],
+        items: &[MediaItem],
+    ) -> DuplicateGroup {
         let mut dup_items: Vec<DuplicateItem> = indices
             .iter()
             .map(|&i| {
-                let score = items[i].quality.as_ref().map(|q| q.quality_score).unwrap_or(0.0);
+                let score = items[i]
+                    .quality
+                    .as_ref()
+                    .map(|q| q.quality_score)
+                    .unwrap_or(0.0);
                 DuplicateItem {
                     index: i,
                     quality_score: score,
@@ -148,22 +188,33 @@ impl Deduplicator {
 
         // Determine which to keep
         let keep_idx = match self.config.keep_strategy {
-            KeepStrategy::HighestQuality => {
-                dup_items.iter().enumerate().max_by(|a, b| a.1.quality_score.partial_cmp(&b.1.quality_score).unwrap()).map(|(i, _)| i)
-            }
+            KeepStrategy::HighestQuality => dup_items
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.quality_score.partial_cmp(&b.1.quality_score).unwrap())
+                .map(|(i, _)| i),
             KeepStrategy::Newest => {
                 // Pre-fetch modified times to avoid repeated fs::metadata calls
-                let mod_times: Vec<Option<std::time::SystemTime>> = dup_items.iter()
-                    .map(|d| std::fs::metadata(&items[d.index].path).and_then(|m| m.modified()).ok())
+                let mod_times: Vec<Option<std::time::SystemTime>> = dup_items
+                    .iter()
+                    .map(|d| {
+                        std::fs::metadata(&items[d.index].path)
+                            .and_then(|m| m.modified())
+                            .ok()
+                    })
                     .collect();
-                mod_times.iter().enumerate()
+                mod_times
+                    .iter()
+                    .enumerate()
                     .filter(|(_, t)| t.is_some())
                     .max_by_key(|(_, t)| t.unwrap())
                     .map(|(i, _)| i)
             }
-            KeepStrategy::Largest => {
-                dup_items.iter().enumerate().max_by_key(|(_, d)| items[d.index].file_size).map(|(i, _)| i)
-            }
+            KeepStrategy::Largest => dup_items
+                .iter()
+                .enumerate()
+                .max_by_key(|(_, d)| items[d.index].file_size)
+                .map(|(i, _)| i),
             KeepStrategy::Manual => None,
         };
 

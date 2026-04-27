@@ -17,14 +17,21 @@ impl OpenLibraryScraper {
     }
 
     /// Search book by title + optional author
-    pub async fn search(&self, title: &str, author: Option<&str>) -> Result<Option<ScrapeResult>, Box<dyn std::error::Error>> {
+    pub async fn search(
+        &self,
+        title: &str,
+        author: Option<&str>,
+    ) -> Result<Option<ScrapeResult>, Box<dyn std::error::Error>> {
         let mut query = format!("title:\"{}\"", title);
         if let Some(a) = author {
             query.push_str(&format!(" AND author:\"{}\"", a));
         }
 
-        let url = format!("{}?q={}&limit=1", self.base_url,
-            crate::scraper::tmdb::urlencoding::encode(&query));
+        let url = format!(
+            "{}?q={}&limit=1",
+            self.base_url,
+            crate::scraper::tmdb::urlencoding::encode(&query)
+        );
 
         let resp = self.client.get(&url).send().await?;
         let search: OlSearchResponse = resp.json().await?;
@@ -34,7 +41,9 @@ impl OpenLibraryScraper {
             None => return Ok(None),
         };
 
-        let cover_url = first.cover_i.map(|id| format!("https://covers.openlibrary.org/b/id/{id}-L.jpg"));
+        let cover_url = first
+            .cover_i
+            .map(|id| format!("https://covers.openlibrary.org/b/id/{id}-L.jpg"));
 
         Ok(Some(ScrapeResult {
             source: ScrapeSource::OpenLibrary,

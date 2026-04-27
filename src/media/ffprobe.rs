@@ -1,5 +1,5 @@
 use crate::core::config::QualityConfig;
-use crate::media::probe::{compute_quality_score, resolution_label, MediaProbe};
+use crate::media::probe::{MediaProbe, compute_quality_score, resolution_label};
 use crate::models::media::{ProbeSource, QualityInfo};
 use serde::Deserialize;
 use std::path::Path;
@@ -23,8 +23,10 @@ impl MediaProbe for FfprobeProbe {
     fn probe(&self, path: &Path) -> Result<QualityInfo, Box<dyn std::error::Error>> {
         let output = std::process::Command::new("ffprobe")
             .args([
-                "-v", "quiet",
-                "-print_format", "json",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
                 "-show_streams",
                 "-show_format",
             ])
@@ -47,9 +49,17 @@ impl MediaProbe for FfprobeProbe {
                     info.height = stream.height;
                     info.video_codec = stream.codec_name.clone();
                     info.video_bitrate = stream.bit_rate.or_else(|| {
-                        ffprobe.format.bit_rate.as_ref().and_then(|b| b.parse().ok())
+                        ffprobe
+                            .format
+                            .bit_rate
+                            .as_ref()
+                            .and_then(|b| b.parse().ok())
                     });
-                    info.duration_secs = ffprobe.format.duration.as_ref().and_then(|d| d.parse().ok());
+                    info.duration_secs = ffprobe
+                        .format
+                        .duration
+                        .as_ref()
+                        .and_then(|d| d.parse().ok());
                 }
                 Some("audio") => {
                     info.audio_codec = stream.codec_name.clone();
