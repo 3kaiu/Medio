@@ -55,16 +55,17 @@ impl Identifier {
         if let Some(caps) = RE_SE.captures(cleaned) {
             let raw_title = clean_title(caps.get(1)?.as_str());
             let suffix_start = caps.get(2)?.start();
-            let media_suffix = extract_media_suffix(cleaned, suffix_start);
+            let tags = extract_media_tags(cleaned);
+            let media_suffix = extract_media_suffix_from_tags(&tags, cleaned, suffix_start);
             return Some(ParsedInfo {
                 raw_title,
                 season: Some(caps.get(2)?.as_str().parse().ok()?),
                 episode: Some(caps.get(3)?.as_str().parse().ok()?),
                 year: extract_year(cleaned),
-                resolution: extract_resolution(cleaned),
-                codec: extract_codec(cleaned),
-                source: extract_source(cleaned),
-                release_group: extract_release_group(cleaned),
+                resolution: tags.resolution,
+                codec: tags.codec,
+                source: tags.source,
+                release_group: tags.release_group,
                 media_suffix,
                 parse_source: ParseSource::Regex,
             });
@@ -73,16 +74,17 @@ impl Identifier {
         if let Some(caps) = RE_X.captures(cleaned) {
             let raw_title = clean_title(caps.get(1)?.as_str());
             let suffix_start = caps.get(2)?.start();
-            let media_suffix = extract_media_suffix(cleaned, suffix_start);
+            let tags = extract_media_tags(cleaned);
+            let media_suffix = extract_media_suffix_from_tags(&tags, cleaned, suffix_start);
             return Some(ParsedInfo {
                 raw_title,
                 season: Some(caps.get(2)?.as_str().parse().ok()?),
                 episode: Some(caps.get(3)?.as_str().parse().ok()?),
                 year: extract_year(cleaned),
-                resolution: extract_resolution(cleaned),
-                codec: extract_codec(cleaned),
-                source: extract_source(cleaned),
-                release_group: extract_release_group(cleaned),
+                resolution: tags.resolution,
+                codec: tags.codec,
+                source: tags.source,
+                release_group: tags.release_group,
                 media_suffix,
                 parse_source: ParseSource::Regex,
             });
@@ -104,16 +106,17 @@ impl Identifier {
                 return None;
             }
             let suffix_start = caps.get(2)?.end();
-            let media_suffix = extract_media_suffix(cleaned, suffix_start);
+            let tags = extract_media_tags(cleaned);
+            let media_suffix = extract_media_suffix_from_tags(&tags, cleaned, suffix_start);
             return Some(ParsedInfo {
                 raw_title,
                 year: Some(year),
                 season: None,
                 episode: None,
-                resolution: extract_resolution(cleaned),
-                codec: extract_codec(cleaned),
-                source: extract_source(cleaned),
-                release_group: extract_release_group(cleaned),
+                resolution: tags.resolution,
+                codec: tags.codec,
+                source: tags.source,
+                release_group: tags.release_group,
                 media_suffix,
                 parse_source: ParseSource::Regex,
             });
@@ -143,17 +146,18 @@ impl Identifier {
         }
         title = COLLAPSE.replace_all(&title, " ").trim().to_string();
 
-        let media_suffix = extract_media_suffix(cleaned, 0);
+        let tags = extract_media_tags(cleaned);
+        let media_suffix = extract_media_suffix_from_tags(&tags, cleaned, 0);
 
         ParsedInfo {
             raw_title: title,
             year: extract_year(cleaned),
             season: None,
             episode: None,
-            resolution: extract_resolution(cleaned),
-            codec: extract_codec(cleaned),
-            source: extract_source(cleaned),
-            release_group: extract_release_group(cleaned),
+            resolution: tags.resolution,
+            codec: tags.codec,
+            source: tags.source,
+            release_group: tags.release_group,
             media_suffix,
             parse_source: ParseSource::Regex,
         }
@@ -174,39 +178,63 @@ fn extract_year(s: &str) -> Option<u16> {
     RE.captures(s).and_then(|c| c.get(1)).and_then(|m| m.as_str().parse().ok())
 }
 
-fn extract_resolution(s: &str) -> Option<String> {
-    static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\b(1080[pi]|2160[pi]|720[pi]|4[UK])\b").unwrap()
-    });
-    RE.captures(s).and_then(|c| c.get(1)).map(|m| m.as_str().to_uppercase())
+/// Extract all media tags (resolution, codec, source, audio, release_group) in a single regex pass
+struct MediaTags {
+    resolution: Option<String>,
+    codec: Option<String>,
+    source: Option<String>,
+    audio: Option<String>,
+    release_group: Option<String>,
 }
 
-fn extract_codec(s: &str) -> Option<String> {
+fn extract_media_tags(s: &str) -> MediaTags {
     static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\b(H\.?26[45]|HEVC|AV1|x26[45]|x264)\b").unwrap()
+        Regex::new(r"(?i)\b(?P<res>1080[pi]|2160[pi]|720[pi]|4[UK])\b|\b(?P<codec>H\.?26[45]|HEVC|AV1|x26[45]|x264)\b|\b(?P<src>WEB-?DL|BluRay|Remux|HDTV|CAM|WEBRip|BDRip|BRRip)\b|\b(?P<audio>AAC|FLAC|DTS|Atmos|DD5\.?1)\b|-(?P<group>[A-Za-z0-9]+)$").unwrap()
     });
-    RE.captures(s).and_then(|c| c.get(1)).map(|m| {
-        let upper = m.as_str().to_uppercase();
-        match upper.as_str() {
-            "HEVC" => "H.265".into(),
-            other => other.into(),
+
+    let mut resolution = None;
+    let mut codec = None;
+    let mut source = None;
+    let mut audio = None;
+    let mut release_group = None;
+
+    for caps in RE.captures_iter(s) {
+        if let Some(m) = caps.name("res") {
+            if resolution.is_none() {
+                resolution = Some(m.as_str().to_uppercase());
+            }
         }
-    })
+        if let Some(m) = caps.name("codec") {
+            if codec.is_none() {
+                let upper = m.as_str().to_uppercase();
+                codec = Some(match upper.as_str() {
+                    "HEVC" => "H.265".into(),
+                    other => other.into(),
+                });
+            }
+        }
+        if let Some(m) = caps.name("src") {
+            if source.is_none() {
+                source = Some(m.as_str().to_string());
+            }
+        }
+        if let Some(m) = caps.name("audio") {
+            if audio.is_none() {
+                audio = Some(m.as_str().to_string());
+            }
+        }
+        if let Some(m) = caps.name("group") {
+            if release_group.is_none() {
+                release_group = Some(m.as_str().to_string());
+            }
+        }
+    }
+
+    MediaTags { resolution, codec, source, audio, release_group }
 }
 
-fn extract_source(s: &str) -> Option<String> {
-    static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\b(WEB-?DL|BluRay|Remux|HDTV|CAM|WEBRip|BDRip|BRRip)\b").unwrap()
-    });
-    RE.captures(s).and_then(|c| c.get(1)).map(|m| m.as_str().to_string())
-}
-
-fn extract_release_group(s: &str) -> Option<String> {
-    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)-([A-Za-z0-9]+)$").unwrap());
-    RE.captures(s).and_then(|c| c.get(1)).map(|m| m.as_str().to_string())
-}
-
-fn extract_media_suffix(s: &str, start: usize) -> Option<String> {
+/// Build media suffix from pre-extracted tags (avoids re-scanning)
+fn extract_media_suffix_from_tags(tags: &MediaTags, s: &str, start: usize) -> Option<String> {
     if start >= s.len() {
         return None;
     }
@@ -214,17 +242,13 @@ fn extract_media_suffix(s: &str, start: usize) -> Option<String> {
     if suffix_part.trim().is_empty() {
         return None;
     }
-    // Collect resolution + source + codec + audio + group
+
     let mut parts: Vec<String> = Vec::new();
-    if let Some(r) = extract_resolution(s) { parts.push(r); }
-    if let Some(src) = extract_source(s) { parts.push(src); }
-    if let Some(c) = extract_codec(s) { parts.push(c); }
-    // Audio
-    static AUDIO_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\b(AAC|FLAC|DTS|Atmos|DD5\.?1)\b").unwrap());
-    if let Some(c) = AUDIO_RE.captures(s).and_then(|c| c.get(1)) {
-        parts.push(c.as_str().to_string());
-    }
-    if let Some(g) = extract_release_group(s) { parts.push(g); }
+    if let Some(r) = &tags.resolution { parts.push(r.clone()); }
+    if let Some(src) = &tags.source { parts.push(src.clone()); }
+    if let Some(c) = &tags.codec { parts.push(c.clone()); }
+    if let Some(a) = &tags.audio { parts.push(a.clone()); }
+    if let Some(g) = &tags.release_group { parts.push(g.clone()); }
 
     if parts.is_empty() {
         None

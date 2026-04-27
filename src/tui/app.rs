@@ -3,6 +3,8 @@ use crate::core::context_infer::ContextInfer;
 use crate::core::hasher::FileHasher;
 use crate::core::identifier::Identifier;
 use crate::core::keyword_filter::KeywordFilter;
+use std::cell::RefCell;
+use std::path::PathBuf;
 use crate::core::scanner::Scanner;
 use crate::db::cache::Cache;
 use crate::engine::deduplicator::{Deduplicator, DuplicateGroup};
@@ -41,6 +43,23 @@ pub enum PendingAction {
     OrganizeExecute,
 }
 
+struct FilteredCache {
+    cache_gen: u64,
+    query: String,
+    tab: Tab,
+    items_len: usize,
+    filtered_items: Vec<(usize, usize)>,  // (original index, selected index)
+}
+
+impl Default for FilteredCache {
+    fn default() -> Self {
+        Self {
+            cache_gen: 0, query: String::new(), tab: Tab::Scan,
+            items_len: 0, filtered_items: Vec::new(),
+        }
+    }
+}
+
 pub struct App {
     pub config: AppConfig,
     pub items: Vec<MediaItem>,
@@ -57,6 +76,8 @@ pub struct App {
     pub path: String,
     pub pending_action: Option<PendingAction>,
     pub view_mode: ViewMode,
+    data_gen: u64,
+    cache: RefCell<FilteredCache>,
 }
 
 impl App {
@@ -77,6 +98,8 @@ impl App {
             path,
             pending_action: None,
             view_mode: ViewMode::Table,
+            data_gen: 0,
+            cache: RefCell::new(FilteredCache::default()),
         }
     }
 
@@ -89,6 +112,7 @@ impl App {
         }
 
         self.items = scanner.scan(path);
+        self.data_gen += 1;
 
         if self.items.is_empty() {
             self.status_msg = "No media files found.".into();
@@ -132,6 +156,7 @@ impl App {
         // Derived previews for other tabs
         let deduplicator = Deduplicator::new(self.config.dedup.clone());
         self.dedup_groups = deduplicator.analyze(&self.items);
+        self.data_gen += 1;
 
         let renamer = Renamer::new(self.config.rename.clone());
         self.rename_plans = renamer.plan(&self.items);
@@ -233,8 +258,17 @@ impl App {
     }
 
     pub fn filtered_items(&self) -> Vec<(usize, &MediaItem)> {
-        if self.search_query.is_empty() {
-            self.items.iter().enumerate().collect()
+        {
+            let cache = self.cache.borrow();
+            if cache.cache_gen == self.data_gen && cache.query == self.search_query && cache.tab == Tab::Scan
+                && cache.items_len == self.items.len()
+            {
+                return cache.filtered_items.iter().map(|&(orig_idx, _)| (orig_idx, &self.items[orig_idx])).collect();
+            }
+        }
+
+        let indices: Vec<(usize, usize)> = if self.search_query.is_empty() {
+            self.items.iter().enumerate().map(|(i, _)| (i, i)).collect()
         } else {
             let q = self.search_query.to_lowercase();
             self.items.iter().enumerate()
@@ -244,8 +278,21 @@ impl App {
                         || item.parsed.as_ref().map(|p| p.raw_title.to_lowercase().contains(&q)).unwrap_or(false)
                         || item.scraped.as_ref().map(|s| s.title.to_lowercase().contains(&q)).unwrap_or(false)
                 })
+                .enumerate()
+                .map(|(sel, (orig, _))| (orig, sel))
                 .collect()
-        }
+        };
+
+        let result: Vec<(usize, &MediaItem)> = indices.iter().map(|&(orig_idx, _)| (orig_idx, &self.items[orig_idx])).collect();
+
+        let mut cache = self.cache.borrow_mut();
+        cache.cache_gen = self.data_gen;
+        cache.query = self.search_query.clone();
+        cache.tab = Tab::Scan;
+        cache.items_len = self.items.len();
+        cache.filtered_items = indices;
+
+        result
     }
 
     pub fn filtered_dedup_groups(&self) -> Vec<(usize, &DuplicateGroup)> {
@@ -450,7 +497,6 @@ mod tests {
     use crate::engine::deduplicator::{DuplicateGroup, DuplicateItem};
     use crate::engine::organizer::{OrganizeAction, OrganizePlan};
     use crate::models::media::{MediaItem, MediaType, RenamePlan};
-    use std::path::PathBuf;
 
     fn make_app() -> App {
         let mut config = AppConfig::default();

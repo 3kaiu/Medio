@@ -41,20 +41,21 @@ impl FileHasher {
 
         let groups = Self::group_by_size(items);
 
-        let mut prefix_results: HashMap<usize, u64> = HashMap::new();
+        // Merge all unresolved prefix hash paths into a single batch for better rayon utilization
+        let mut prefix_unresolved: Vec<usize> = Vec::new();
         for group in &groups {
-            let unresolved: Vec<usize> = group
-                .iter()
-                .copied()
-                .filter(|&i| items[i].hash.as_ref().and_then(|h| h.prefix_hash).is_none())
-                .collect();
-            if unresolved.is_empty() {
-                continue;
+            for &idx in group {
+                if items[idx].hash.as_ref().and_then(|h| h.prefix_hash).is_none() {
+                    prefix_unresolved.push(idx);
+                }
             }
+        }
 
-            let paths: Vec<&Path> = unresolved.iter().map(|&i| items[i].path.as_path()).collect();
+        let mut prefix_results: HashMap<usize, u64> = HashMap::new();
+        if !prefix_unresolved.is_empty() {
+            let paths: Vec<&Path> = prefix_unresolved.iter().map(|&i| items[i].path.as_path()).collect();
             let hashes = Self::prefix_hash(&paths);
-            for (j, &idx) in unresolved.iter().enumerate() {
+            for (j, &idx) in prefix_unresolved.iter().enumerate() {
                 if let Some(h) = hashes[j] {
                     prefix_results.insert(idx, h);
                 }
@@ -84,20 +85,21 @@ impl FileHasher {
             }
         }
 
-        let mut full_results: HashMap<usize, u64> = HashMap::new();
+        // Merge all unresolved full hash paths into a single batch
+        let mut full_unresolved: Vec<usize> = Vec::new();
         for group in &need_full {
-            let unresolved: Vec<usize> = group
-                .iter()
-                .copied()
-                .filter(|&i| items[i].hash.as_ref().and_then(|h| h.full_hash).is_none())
-                .collect();
-            if unresolved.is_empty() {
-                continue;
+            for &idx in group {
+                if items[idx].hash.as_ref().and_then(|h| h.full_hash).is_none() {
+                    full_unresolved.push(idx);
+                }
             }
+        }
 
-            let paths: Vec<&Path> = unresolved.iter().map(|&i| items[i].path.as_path()).collect();
+        let mut full_results: HashMap<usize, u64> = HashMap::new();
+        if !full_unresolved.is_empty() {
+            let paths: Vec<&Path> = full_unresolved.iter().map(|&i| items[i].path.as_path()).collect();
             let hashes = Self::hash_full_batch(&paths);
-            for (j, &idx) in unresolved.iter().enumerate() {
+            for (j, &idx) in full_unresolved.iter().enumerate() {
                 if let Some(h) = hashes[j] {
                     full_results.insert(idx, h);
                 }
