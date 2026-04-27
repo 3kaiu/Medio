@@ -1,0 +1,121 @@
+use crate::core::config::AppConfig;
+use crate::core::context_infer::ContextInfer;
+use crate::core::identifier::Identifier;
+use crate::core::keyword_filter::KeywordFilter;
+use crate::core::scanner::Scanner;
+use crate::engine::renamer::Renamer;
+use std::path::Path;
+
+pub fn run(path: &str, config: &AppConfig, dry_run: bool, json_output: bool) {
+    let root = Path::new(path);
+    if !root.exists() {
+        eprintln!("Error: path does not exist: {path}");
+        return;
+    }
+
+    // Step 1: Scan + Identify
+    let scanner = Scanner::new(config.scan.clone());
+    let mut items = scanner.scan(root);
+
+    if items.is_empty() {
+        println!("No media files found.");
+        return;
+    }
+
+    let keyword_filter = KeywordFilter::new(config.scan.keyword_filter.clone());
+    let identifier = Identifier::new(keyword_filter);
+    identifier.parse_batch(&mut items);
+
+    for item in items.iter_mut() {
+        if let Some(parsed) = &item.parsed {
+            let parent_dirs = collect_parent_dirs(&item.path, 3);
+            let inferred = ContextInfer::infer(parsed, &parent_dirs);
+            item.parsed = Some(inferred);
+        }
+    }
+
+    // Step 2: Generate rename plans
+    let renamer = Renamer::new(config.rename.clone());
+    let plans = renamer.plan(&items);
+
+    if plans.is_empty() {
+        println!("No files need renaming.");
+        return;
+    }
+
+    // Output plans
+    if json_output {
+        let json = serde_json::to_string_pretty(&plans).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"));
+        println!("{json}");
+    } else {
+        print_rename_table(&plans);
+    }
+
+    // Step 3: Execute or preview
+    let is_dry = dry_run || config.general.dry_run;
+    let actions = renamer.execute(&plans, is_dry);
+
+    if !is_dry && config.general.confirm {
+        println!("\n{} files will be renamed. Proceed? [y/N]", plans.len());
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).ok();
+        if input.trim().to_lowercase() != "y" {
+            println!("Aborted.");
+            return;
+        }
+        // Re-execute with dry_run=false
+        let actions = renamer.execute(&plans, false);
+        for action in &actions {
+            println!("{action}");
+        }
+    } else {
+        for action in &actions {
+            println!("{action}");
+        }
+    }
+
+    println!("\n{} rename plans generated, {} actions taken.", plans.len(), actions.len());
+}
+
+fn collect_parent_dirs(path: &std::path::Path, max: usize) -> Vec<&std::path::Path> {
+    let mut dirs = Vec::new();
+    let mut current = path.parent();
+    while let Some(dir) = current {
+        if dirs.len() >= max { break; }
+        dirs.push(dir);
+        current = dir.parent();
+    }
+    dirs
+}
+
+fn print_rename_table(plans: &[crate::models::media::RenamePlan]) {
+    use console::style;
+
+    println!(
+        "{}  {}  {}",
+        style("Old").bold().cyan().dim(),
+        style("→").bold().yellow().dim(),
+        style("New").bold().green().dim(),
+    );
+
+    for plan in plans {
+        let old_name = plan.old_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let new_name = plan.new_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        println!("  {} → {}", truncate(&old_name, 50), truncate(&new_name, 50));
+
+        for sub in &plan.subtitle_plans {
+            let sub_old = sub.old_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let sub_new = sub.new_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            println!("  {} → {}  (subtitle)", truncate(&sub_old, 48), truncate(&sub_new, 48));
+        }
+    }
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let truncated: String = s.chars().take(max - 1).collect();
+        format!("{truncated}…")
+    }
+}
