@@ -50,9 +50,17 @@ pub fn run_init(config_path: &PathBuf) {
             }
         }
         "cloudflare" => {
+            let account_id = prompt_input("   Cloudflare account ID: ");
             let token = prompt_input("   Cloudflare API token: ");
+            if !account_id.is_empty() {
+                config.ai.cloudflare.account_id = account_id;
+            }
             if !token.is_empty() {
                 config.ai.cloudflare.api_token = token;
+            }
+            let model = prompt_input("   Model (default: @cf/meta/llama-3.1-8b-instruct): ");
+            if !model.is_empty() {
+                config.ai.cloudflare.model = model;
             }
         }
         "custom" => {

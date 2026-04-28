@@ -23,7 +23,7 @@ impl OpenAiCompat {
                 config.deepseek.model.clone(),
             ),
             AiProvider::Cloudflare => (
-                config.cloudflare.url.clone(),
+                config.cloudflare.base_url(),
                 config.cloudflare.api_token.clone(),
                 config.cloudflare.model.clone(),
             ),
@@ -42,7 +42,10 @@ impl OpenAiCompat {
     }
 
     pub fn is_configured(&self) -> bool {
-        !self.url.is_empty() && !self.key.is_empty() && !self.model.is_empty()
+        !self.url.is_empty()
+            && !self.url.contains("{account_id}")
+            && !self.key.is_empty()
+            && !self.model.is_empty()
     }
 
     /// Identify media from filename using AI

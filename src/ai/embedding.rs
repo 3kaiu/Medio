@@ -25,7 +25,7 @@ impl EmbeddingClient {
                 },
             ),
             crate::core::types::AiProvider::Cloudflare => (
-                config.cloudflare.url.clone(),
+                config.cloudflare.base_url(),
                 config.cloudflare.api_token.clone(),
                 if config.embedding_model.is_empty() {
                     config.cloudflare.model.clone()
@@ -52,7 +52,10 @@ impl EmbeddingClient {
     }
 
     pub fn is_configured(&self) -> bool {
-        !self.url.is_empty() && !self.key.is_empty() && !self.model.is_empty()
+        !self.url.is_empty()
+            && !self.url.contains("{account_id}")
+            && !self.key.is_empty()
+            && !self.model.is_empty()
     }
 
     /// Get embedding vector for a single text

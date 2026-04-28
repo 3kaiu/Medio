@@ -87,6 +87,8 @@ pub struct DeepSeekConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CloudflareConfig {
+    #[serde(default)]
+    pub account_id: String,
     #[serde(default = "default_cf_url")]
     pub url: String,
     #[serde(default)]
@@ -256,13 +258,14 @@ fn default_deepseek_model() -> String {
 }
 fn default_cloudflare() -> CloudflareConfig {
     CloudflareConfig {
+        account_id: String::new(),
         url: default_cf_url(),
         api_token: String::new(),
         model: default_cf_model(),
     }
 }
 fn default_cf_url() -> String {
-    "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai".into()
+    "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1".into()
 }
 fn default_cf_model() -> String {
     "@cf/meta/llama-3.1-8b-instruct".into()
@@ -447,6 +450,19 @@ impl Default for AppConfig {
             quality: QualityConfig::default(),
             cache: CacheConfig::default(),
         }
+    }
+}
+
+impl CloudflareConfig {
+    pub fn base_url(&self) -> String {
+        let mut url = self.url.trim_end_matches('/').to_string();
+        if !self.account_id.is_empty() && url.contains("{account_id}") {
+            url = url.replace("{account_id}", &self.account_id);
+        }
+        if url.ends_with("/ai") {
+            url.push_str("/v1");
+        }
+        url
     }
 }
 
