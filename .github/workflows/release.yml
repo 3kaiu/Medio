@@ -10,12 +10,13 @@ permissions:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: macos-latest
             target: aarch64-apple-darwin
             suffix: darwin-aarch64
-          - os: macos-13
+          - os: macos-latest
             target: x86_64-apple-darwin
             suffix: darwin-x86_64
           - os: ubuntu-latest
