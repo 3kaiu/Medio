@@ -292,16 +292,16 @@ fn default_dup_action() -> DupAction {
     DupAction::Trash
 }
 fn default_movie_template() -> String {
-    "{{title}}{{year}} - {{media_suffix}}".into()
+    "{title} ({year})".into()
 }
 fn default_tv_template() -> String {
-    "{{title}} - S{{season}}E{{episode}} - {{episode_name}}".into()
+    "{title} - S{s:02d}E{e:02d} - {ep_name}".into()
 }
 fn default_music_template() -> String {
-    "{{artist}} - {{album}} - {{title}}".into()
+    "{artist} - {album} - {title}".into()
 }
 fn default_novel_template() -> String {
-    "{{author}} - {{title}}".into()
+    "{author} - {title}".into()
 }
 fn default_organize_mode() -> OrganizeMode {
     OrganizeMode::Archive

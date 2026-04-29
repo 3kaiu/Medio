@@ -552,6 +552,7 @@ mod tests {
             old_path: PathBuf::from("/tmp/old.mkv"),
             new_path: PathBuf::from("/tmp/new.mkv"),
             subtitle_plans: Vec::new(),
+            directory_plans: Vec::new(),
         });
 
         app.request_rename_execute();
@@ -567,6 +568,7 @@ mod tests {
             old_path: PathBuf::from("/tmp/old.mkv"),
             new_path: PathBuf::from("/tmp/new.mkv"),
             subtitle_plans: Vec::new(),
+            directory_plans: Vec::new(),
         });
 
         app.request_rename_execute();
@@ -657,6 +659,7 @@ mod tests {
             old_path: PathBuf::from("/tmp/old.mkv"),
             new_path: PathBuf::from("/tmp/new.mkv"),
             subtitle_plans: Vec::new(),
+            directory_plans: Vec::new(),
         });
 
         app.request_rename_execute();

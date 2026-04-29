@@ -40,7 +40,7 @@ pub async fn populate_scrape_results(items: &mut [MediaItem], config: &AppConfig
         for item in items.iter_mut() {
             if item.scraped.is_none() {
                 if let Some(parsed) = &item.parsed {
-                    let cache_key = format!("{}:{:?}", parsed.raw_title, item.media_type);
+                    let cache_key = scrape_cache_key(parsed, item.media_type);
                     if let Some(cached) = cache.get_scrape(&cache_key) {
                         item.scraped = Some(cached);
                     }
@@ -96,7 +96,7 @@ pub async fn populate_scrape_results(items: &mut [MediaItem], config: &AppConfig
             // Write to cache
             if let Some(ref cache) = cache {
                 if let Some(parsed) = &items[idx].parsed {
-                    let cache_key = format!("{}:{:?}", parsed.raw_title, items[idx].media_type);
+                    let cache_key = scrape_cache_key(parsed, items[idx].media_type);
                     let _ = cache.set_scrape(&cache_key, &result);
                 }
             }
@@ -311,6 +311,17 @@ async fn scrape_with_fallback(
     None
 }
 
+fn scrape_cache_key(parsed: &ParsedInfo, media_type: MediaType) -> String {
+    format!(
+        "{:?}:{}:{}:{}:{}",
+        media_type,
+        parsed.raw_title.trim(),
+        parsed.year.map(|y| y.to_string()).unwrap_or_default(),
+        parsed.season.map(|s| s.to_string()).unwrap_or_default(),
+        parsed.episode.map(|e| e.to_string()).unwrap_or_default()
+    )
+}
+
 fn guess_from_parsed(parsed: &ParsedInfo) -> Option<ScrapeResult> {
     if parsed.raw_title.trim().is_empty() {
         return None;
@@ -402,5 +413,28 @@ mod tests {
         let result = result.unwrap();
         assert_eq!(result.source, ScrapeSource::Guess);
         assert_eq!(result.title, "Arrival");
+    }
+
+    #[test]
+    fn test_scrape_cache_key_distinguishes_tv_episodes() {
+        let base = ParsedInfo {
+            raw_title: "Love.Death.and.Robots".into(),
+            year: Some(2025),
+            season: Some(4),
+            episode: Some(1),
+            resolution: None,
+            codec: None,
+            source: None,
+            release_group: None,
+            media_suffix: None,
+            parse_source: ParseSource::Regex,
+        };
+        let mut other = base.clone();
+        other.episode = Some(2);
+
+        assert_ne!(
+            scrape_cache_key(&base, MediaType::TvShow),
+            scrape_cache_key(&other, MediaType::TvShow)
+        );
     }
 }

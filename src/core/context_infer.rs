@@ -25,6 +25,9 @@ impl ContextInfer {
         let mut result = parsed.clone();
 
         fill_episode_markers_from_title(&mut result);
+        if let Some(cleaned) = normalize_title_dir(&result.raw_title) {
+            result.raw_title = cleaned;
+        }
 
         // Infer season from parent dir (e.g., "Season 1", "S01")
         if result.season.is_none() {
@@ -76,15 +79,15 @@ impl ContextInfer {
             }
         }
 
-        // Infer title from parent dir if raw_title is empty or just an episode marker.
+        // Infer title from parent dir if raw_title is empty, placeholder-like, or obviously noisy.
         if should_infer_title_from_parent(&result.raw_title) {
             for dir in parent_dirs.iter().take(2) {
                 let name = dir
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default();
-                if looks_like_real_title_dir(&name) {
-                    result.raw_title = name;
+                if let Some(cleaned) = normalize_title_dir(&name) {
+                    result.raw_title = cleaned;
                     result.parse_source = ParseSource::Context;
                     break;
                 }
@@ -146,8 +149,15 @@ fn should_infer_title_from_parent(title: &str) -> bool {
         )
         .unwrap()
     });
+    static RE_EP_MARKER_WITH_SUFFIX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"(?i)^s\d{1,2}e\d{1,3}(?:[.\s_-].*)?$").unwrap()
+    });
 
-    RE_PLACEHOLDER_EXACT.is_match(title) || RE_PLACEHOLDER_PREFIX.is_match(title)
+    RE_PLACEHOLDER_EXACT.is_match(title)
+        || RE_PLACEHOLDER_PREFIX.is_match(title)
+        || RE_EP_MARKER_WITH_SUFFIX.is_match(title)
+        || starts_with_episode_marker(title)
+        || looks_like_noisy_title(title)
 }
 
 fn fill_episode_markers_from_title(parsed: &mut ParsedInfo) {
@@ -203,6 +213,102 @@ fn looks_like_real_title_dir(name: &str) -> bool {
     });
 
     !RE_JUNK.is_match(name.trim())
+}
+
+fn normalize_title_dir(name: &str) -> Option<String> {
+    if !looks_like_real_title_dir(name) {
+        return None;
+    }
+
+    static RE_CJK_FILLER: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?P<a>\p{Han})[A-Za-z](?P<b>\p{Han})").unwrap());
+    static RE_TRAILING_TAGS: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(
+            r"(?ix)
+            [\s._-]*
+            (?:[\(\[]?\d{4}[\)\]]?)?
+            (?:[\s._-]+(?:4k|2160p|1080p|720p|hdr|dv|dovi|高码|低码|web-?dl|bluray|remux|h265|x265|x264|aac|dts|atmos))+
+            \s*$
+        ",
+        )
+        .unwrap()
+    });
+    static RE_YEAR_SUFFIX: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"\s*[\(\[](\d{4})[\)\]]\s*$").unwrap());
+    static RE_SEASON_PACK_SUFFIX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"(?i)\s+\d+(?:-\d+)?季(?:全集)?(?:\(\d+\))?\s*$").unwrap()
+    });
+    static RE_PUNCT: Lazy<Regex> = Lazy::new(|| Regex::new(r"[._]+").unwrap());
+    static RE_MULTI_SPACE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s+").unwrap());
+
+    let mut cleaned = name.trim().to_string();
+    while let Some(caps) = RE_CJK_FILLER.captures(&cleaned) {
+        let whole = caps.get(0).map(|m| m.as_str()).unwrap_or_default();
+        let replaced = format!("{}{}", &caps["a"], &caps["b"]);
+        cleaned = cleaned.replacen(whole, &replaced, 1);
+    }
+
+    cleaned = RE_TRAILING_TAGS.replace(&cleaned, "").to_string();
+    cleaned = RE_YEAR_SUFFIX.replace(&cleaned, "").to_string();
+    cleaned = RE_SEASON_PACK_SUFFIX.replace(&cleaned, "").to_string();
+    cleaned = RE_PUNCT.replace_all(&cleaned, " ").to_string();
+    cleaned = RE_MULTI_SPACE.replace_all(&cleaned, " ").trim().to_string();
+
+    if cleaned.is_empty() || looks_like_noisy_title(&cleaned) {
+        None
+    } else {
+        Some(cleaned)
+    }
+}
+
+fn looks_like_noisy_title(title: &str) -> bool {
+    static RE_ONLY_TAGS: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(
+            r"(?ix)
+            ^
+            [\d\s\.\-_\(\)]*
+            (?:
+                hq|hdr|dv|dovi|web-?dl|bluray|remux|x26[45]|h\.?26[45]|aac|dts|atmos
+                |2160p|1080p|720p
+            )+
+            [\d\s\.\-_\(\)]*
+            $
+        ",
+        )
+        .unwrap()
+    });
+
+    let trimmed = title.trim();
+    trimmed.starts_with("202")
+        || RE_ONLY_TAGS.is_match(trimmed)
+        || (trimmed.is_ascii() && trimmed.chars().filter(|c| c.is_alphanumeric()).count() <= 3)
+}
+
+fn starts_with_episode_marker(title: &str) -> bool {
+    let upper = title.trim().to_ascii_uppercase();
+    let chars: Vec<char> = upper.chars().collect();
+    if chars.len() < 4 || chars[0] != 'S' {
+        return false;
+    }
+
+    let mut i = 1;
+    let mut season_digits = 0;
+    while i < chars.len() && chars[i].is_ascii_digit() && season_digits < 2 {
+        i += 1;
+        season_digits += 1;
+    }
+    if season_digits == 0 || i >= chars.len() || chars[i] != 'E' {
+        return false;
+    }
+
+    i += 1;
+    let mut episode_digits = 0;
+    while i < chars.len() && chars[i].is_ascii_digit() && episode_digits < 3 {
+        i += 1;
+        episode_digits += 1;
+    }
+
+    episode_digits > 0
 }
 
 #[cfg(test)]
@@ -307,8 +413,26 @@ mod tests {
         let season_dir = Path::new("/media/黄石 1-5季/S05");
         let show_dir = Path::new("/media/黄石 1-5季");
         let result = ContextInfer::infer(&parsed, &[season_dir, show_dir]);
-        assert_eq!(result.raw_title, "黄石 1-5季");
+        assert_eq!(result.raw_title, "黄石");
         assert_eq!(result.season, Some(5));
         assert_eq!(result.episode, Some(9));
+    }
+
+    #[test]
+    fn test_infer_title_from_noisy_filename_uses_cleaned_parent_dir() {
+        let parsed = make_parsed("2025. .HQ. . .HDR. (2025) - . . .");
+        let dir = Path::new("/media/刺z杀z小z说家2 (2025) 4K 高码 HDR");
+        let result = ContextInfer::infer(&parsed, &[dir]);
+        assert_eq!(result.raw_title, "刺杀小说家2");
+        assert_eq!(result.year, Some(2025));
+    }
+
+    #[test]
+    fn test_infer_title_strips_season_pack_suffix_from_parent_dir() {
+        let parsed = make_parsed("S09E02");
+        let season_dir = Path::new("/media/9号秘事 1-9季(1)/S09");
+        let show_dir = Path::new("/media/9号秘事 1-9季(1)");
+        let result = ContextInfer::infer(&parsed, &[season_dir, show_dir]);
+        assert_eq!(result.raw_title, "9号秘事");
     }
 }

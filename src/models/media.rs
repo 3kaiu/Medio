@@ -129,10 +129,17 @@ pub struct RenamePlan {
     pub old_path: PathBuf,
     pub new_path: PathBuf,
     pub subtitle_plans: Vec<SubtitleRenamePlan>,
+    pub directory_plans: Vec<DirectoryRenamePlan>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubtitleRenamePlan {
+    pub old_path: PathBuf,
+    pub new_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirectoryRenamePlan {
     pub old_path: PathBuf,
     pub new_path: PathBuf,
 }

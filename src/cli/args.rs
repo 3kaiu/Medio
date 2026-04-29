@@ -10,12 +10,12 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
 
-    /// Only preview, don't execute (default: true)
-    #[arg(long, default_value_t = true)]
+    /// Only preview, don't execute
+    #[arg(long)]
     pub dry_run: bool,
 
     /// Ask confirmation before each action
-    #[arg(long, default_value_t = true)]
+    #[arg(long)]
     pub confirm: bool,
 
     /// Output as JSON
