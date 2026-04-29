@@ -84,7 +84,7 @@ impl EmbeddingClient {
 
         let resp = self
             .client
-            .post(&format!("{}/embeddings", self.url.trim_end_matches('/')))
+            .post(format!("{}/embeddings", self.url.trim_end_matches('/')))
             .header("Authorization", format!("Bearer {}", self.key))
             .header("Content-Type", "application/json")
             .json(&request)

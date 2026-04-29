@@ -125,20 +125,20 @@ impl Organizer {
                 let mut dir = root.join(type_dir).join(&title);
 
                 // Add season subdirectory for TV
-                if item.media_type == MediaType::TvShow {
-                    if let Some(s) = item.parsed.as_ref().and_then(|p| p.season) {
-                        dir = dir.join(format!("Season {s:02}"));
-                    }
+                if item.media_type == MediaType::TvShow
+                    && let Some(s) = item.parsed.as_ref().and_then(|p| p.season)
+                {
+                    dir = dir.join(format!("Season {s:02}"));
                 }
 
                 // Add artist/album for music
-                if item.media_type == MediaType::Music {
-                    if let Some(artist) = item.scraped.as_ref().and_then(|s| s.artist.as_ref()) {
-                        dir = root
-                            .join(type_dir)
-                            .join(sanitize_filename(artist))
-                            .join(&title);
-                    }
+                if item.media_type == MediaType::Music
+                    && let Some(artist) = item.scraped.as_ref().and_then(|s| s.artist.as_ref())
+                {
+                    dir = root
+                        .join(type_dir)
+                        .join(sanitize_filename(artist))
+                        .join(&title);
                 }
 
                 Some(dir)
@@ -158,10 +158,10 @@ impl Organizer {
 
                 if let Some(title) = title {
                     let mut dir = parent.join(&title);
-                    if item.media_type == MediaType::TvShow {
-                        if let Some(s) = item.parsed.as_ref().and_then(|p| p.season) {
-                            dir = dir.join(format!("Season {s:02}"));
-                        }
+                    if item.media_type == MediaType::TvShow
+                        && let Some(s) = item.parsed.as_ref().and_then(|p| p.season)
+                    {
+                        dir = dir.join(format!("Season {s:02}"));
                     }
                     Some(dir)
                 } else {
@@ -190,11 +190,11 @@ impl Organizer {
             if let Some(parent) = plan.target.parent() {
                 if dry_run {
                     actions.push(format!("[dry-run] mkdir -p {}", parent.display()));
-                } else if !parent.exists() {
-                    if let Err(e) = std::fs::create_dir_all(parent) {
-                        actions.push(format!("[error] mkdir {}: {e}", parent.display()));
-                        continue;
-                    }
+                } else if !parent.exists()
+                    && let Err(e) = std::fs::create_dir_all(parent)
+                {
+                    actions.push(format!("[error] mkdir {}: {e}", parent.display()));
+                    continue;
                 }
             }
 
@@ -284,10 +284,9 @@ impl Organizer {
                     && std::fs::read_dir(dir)
                         .map(|mut d| d.next().is_none())
                         .unwrap_or(false)
+                    && let Ok(()) = std::fs::remove_dir(dir)
                 {
-                    if let Ok(()) = std::fs::remove_dir(dir) {
-                        actions.push(format!("[cleanup] removed empty dir {}", dir.display()));
-                    }
+                    actions.push(format!("[cleanup] removed empty dir {}", dir.display()));
                 }
             }
         }

@@ -8,16 +8,16 @@ use crate::engine::renamer::Renamer;
 use crate::scraper;
 use std::path::Path;
 
-pub fn run(
-    path: &str,
-    config: &AppConfig,
-    mode: &str,
-    with_nfo: bool,
-    with_images: bool,
-    link: &str,
-    dry_run: bool,
-    json_output: bool,
-) {
+pub struct OrganizeOptions<'a> {
+    pub mode: &'a str,
+    pub with_nfo: bool,
+    pub with_images: bool,
+    pub link: &'a str,
+    pub dry_run: bool,
+    pub json_output: bool,
+}
+
+pub fn run(path: &str, config: &AppConfig, options: OrganizeOptions<'_>) {
     let root = Path::new(path);
     if !root.exists() {
         eprintln!("Error: path does not exist: {path}");
@@ -25,17 +25,20 @@ pub fn run(
     }
 
     // Parse mode
-    let organize_mode = match mode.to_lowercase().as_str() {
+    let organize_mode = match options.mode.to_lowercase().as_str() {
         "rename" => OrganizeMode::Rename,
         "archive" => OrganizeMode::Archive,
         "local" => OrganizeMode::Local,
         _ => {
-            eprintln!("Unknown mode: {mode} (use: rename, archive, local)");
+            eprintln!(
+                "Unknown mode: {} (use: rename, archive, local)",
+                options.mode
+            );
             return;
         }
     };
 
-    let link_mode = match link.to_lowercase().as_str() {
+    let link_mode = match options.link.to_lowercase().as_str() {
         "none" | "" => LinkMode::None,
         "hard" => LinkMode::Hard,
         "sym" | "symlink" => LinkMode::Sym,
@@ -44,10 +47,10 @@ pub fn run(
 
     // Override config with CLI flags
     let mut org_config = config.organize.clone();
-    if with_nfo {
+    if options.with_nfo {
         org_config.with_nfo = true;
     }
-    if with_images {
+    if options.with_images {
         org_config.with_images = true;
     }
 
@@ -68,7 +71,13 @@ pub fn run(
     }
 
     // Step 2: Scrape metadata for better organization
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = match crate::core::runtime::build() {
+        Ok(rt) => rt,
+        Err(err) => {
+            eprintln!("{err}");
+            return;
+        }
+    };
     rt.block_on(async {
         scraper::populate_scrape_results(&mut items, config).await;
     });
@@ -82,7 +91,7 @@ pub fn run(
             return;
         }
 
-        if json_output {
+        if options.json_output {
             let json = serde_json::to_string_pretty(&plans)
                 .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"));
             println!("{json}");
@@ -90,17 +99,17 @@ pub fn run(
             print_rename_table(&plans);
         }
 
-        let is_dry = dry_run || config.general.dry_run;
-        if !is_dry && config.general.confirm {
-            if !dialoguer::Confirm::new()
+        let is_dry = options.dry_run || config.general.dry_run;
+        if !is_dry
+            && config.general.confirm
+            && !dialoguer::Confirm::new()
                 .with_prompt(format!("{} files will be renamed. Proceed?", plans.len()))
                 .default(false)
                 .interact()
                 .unwrap_or(false)
-            {
-                println!("Aborted.");
-                return;
-            }
+        {
+            println!("Aborted.");
+            return;
         }
 
         let actions = renamer.execute(&plans, is_dry);
@@ -125,7 +134,7 @@ pub fn run(
     }
 
     // Output plans
-    if json_output {
+    if options.json_output {
         let json = serde_json::to_string_pretty(
             &plans
                 .iter()
@@ -147,9 +156,10 @@ pub fn run(
     }
 
     // Step 4: Execute
-    let is_dry = dry_run || config.general.dry_run;
-    if !is_dry && config.general.confirm {
-        if !dialoguer::Confirm::new()
+    let is_dry = options.dry_run || config.general.dry_run;
+    if !is_dry
+        && config.general.confirm
+        && !dialoguer::Confirm::new()
             .with_prompt(format!(
                 "{} organize actions will be applied. Proceed?",
                 plans.len()
@@ -157,10 +167,9 @@ pub fn run(
             .default(false)
             .interact()
             .unwrap_or(false)
-        {
-            println!("Aborted.");
-            return;
-        }
+    {
+        println!("Aborted.");
+        return;
     }
 
     let actions = organizer.execute(&plans, is_dry);

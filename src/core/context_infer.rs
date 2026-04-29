@@ -65,16 +65,15 @@ impl ContextInfer {
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default();
-                if let Some(caps) = RE_YEAR.captures(&name) {
-                    if let Some(y) = caps.get(1).and_then(|m| m.as_str().parse().ok()) {
-                        if y >= 1900 && y <= 2030 {
-                            result.year = Some(y);
-                            if result.parse_source != ParseSource::Regex {
-                                result.parse_source = ParseSource::Context;
-                            }
-                            break;
-                        }
+                if let Some(caps) = RE_YEAR.captures(&name)
+                    && let Some(y) = caps.get(1).and_then(|m| m.as_str().parse().ok())
+                    && (1900..=2030).contains(&y)
+                {
+                    result.year = Some(y);
+                    if result.parse_source != ParseSource::Regex {
+                        result.parse_source = ParseSource::Context;
                     }
+                    break;
                 }
             }
         }
@@ -149,9 +148,8 @@ fn should_infer_title_from_parent(title: &str) -> bool {
         )
         .unwrap()
     });
-    static RE_EP_MARKER_WITH_SUFFIX: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)^s\d{1,2}e\d{1,3}(?:[.\s_-].*)?$").unwrap()
-    });
+    static RE_EP_MARKER_WITH_SUFFIX: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?i)^s\d{1,2}e\d{1,3}(?:[.\s_-].*)?$").unwrap());
 
     RE_PLACEHOLDER_EXACT.is_match(title)
         || RE_PLACEHOLDER_PREFIX.is_match(title)
@@ -235,9 +233,8 @@ fn normalize_title_dir(name: &str) -> Option<String> {
     });
     static RE_YEAR_SUFFIX: Lazy<Regex> =
         Lazy::new(|| Regex::new(r"\s*[\(\[](\d{4})[\)\]]\s*$").unwrap());
-    static RE_SEASON_PACK_SUFFIX: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\s+\d+(?:-\d+)?季(?:全集)?(?:\(\d+\))?\s*$").unwrap()
-    });
+    static RE_SEASON_PACK_SUFFIX: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?i)\s+\d+(?:-\d+)?季(?:全集)?(?:\(\d+\))?\s*$").unwrap());
     static RE_PUNCT: Lazy<Regex> = Lazy::new(|| Regex::new(r"[._]+").unwrap());
     static RE_MULTI_SPACE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s+").unwrap());
 

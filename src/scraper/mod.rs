@@ -12,6 +12,7 @@ use crate::models::media::{MediaItem, MediaType, ParsedInfo, ScrapeResult, Scrap
 use futures::stream::{self, StreamExt};
 use musicbrainz::MusicBrainzScraper;
 use openlibrary::OpenLibraryScraper;
+use std::path::Path;
 use tmdb::TmdbScraper;
 
 pub async fn populate_scrape_results(items: &mut [MediaItem], config: &AppConfig) {
@@ -38,12 +39,12 @@ pub async fn populate_scrape_results(items: &mut [MediaItem], config: &AppConfig
     // Preload cache hits
     if let Some(ref cache) = cache {
         for item in items.iter_mut() {
-            if item.scraped.is_none() {
-                if let Some(parsed) = &item.parsed {
-                    let cache_key = scrape_cache_key(parsed, item.media_type);
-                    if let Some(cached) = cache.get_scrape(&cache_key) {
-                        item.scraped = Some(cached);
-                    }
+            if item.scraped.is_none()
+                && let Some(parsed) = &item.parsed
+            {
+                let cache_key = scrape_cache_key(parsed, item.media_type);
+                if let Some(cached) = cache.get_scrape(&cache_key) {
+                    item.scraped = Some(cached);
                 }
             }
         }
@@ -67,23 +68,24 @@ pub async fn populate_scrape_results(items: &mut [MediaItem], config: &AppConfig
             let mb = mb.clone();
             let ol = ol.clone();
             let fallback_chain = fallback_chain.clone();
-            let chinese_priority = chinese_priority;
             let ai_client = ai_client.clone();
             let embedding_client = embedding_client.clone();
             async move {
-                let result = scrape_with_fallback(
-                    &path,
-                    &parsed,
+                let request = ScrapeRequest {
+                    path: &path,
+                    parsed: &parsed,
                     media_type,
-                    &tmdb,
-                    &mb,
-                    &ol,
-                    ai_client.as_ref(),
-                    &embedding_client,
-                    &fallback_chain,
+                };
+                let context = ScrapeContext {
+                    tmdb: &tmdb,
+                    mb: &mb,
+                    ol: &ol,
+                    ai_client: ai_client.as_ref(),
+                    embedding_client: &embedding_client,
+                    fallback_chain: &fallback_chain,
                     chinese_priority,
-                )
-                .await;
+                };
+                let result = scrape_with_fallback(request, &context).await;
                 (idx, result)
             }
         })
@@ -94,11 +96,11 @@ pub async fn populate_scrape_results(items: &mut [MediaItem], config: &AppConfig
     for (idx, result) in results {
         if let Some(result) = result {
             // Write to cache
-            if let Some(ref cache) = cache {
-                if let Some(parsed) = &items[idx].parsed {
-                    let cache_key = scrape_cache_key(parsed, items[idx].media_type);
-                    let _ = cache.set_scrape(&cache_key, &result);
-                }
+            if let Some(ref cache) = cache
+                && let Some(parsed) = &items[idx].parsed
+            {
+                let cache_key = scrape_cache_key(parsed, items[idx].media_type);
+                let _ = cache.set_scrape(&cache_key, &result);
             }
             items[idx].scraped = Some(result);
         }
@@ -110,37 +112,49 @@ pub async fn populate_scrape_results(items: &mut [MediaItem], config: &AppConfig
     }
 }
 
-async fn scrape_with_fallback(
-    path: &std::path::Path,
-    parsed: &Option<ParsedInfo>,
+struct ScrapeRequest<'a> {
+    path: &'a Path,
+    parsed: &'a Option<ParsedInfo>,
     media_type: MediaType,
-    tmdb: &TmdbScraper,
-    mb: &MusicBrainzScraper,
-    ol: &OpenLibraryScraper,
-    ai_client: Option<&OpenAiCompat>,
-    embedding_client: &EmbeddingClient,
-    fallback_chain: &[String],
+}
+
+struct ScrapeContext<'a> {
+    tmdb: &'a TmdbScraper,
+    mb: &'a MusicBrainzScraper,
+    ol: &'a OpenLibraryScraper,
+    ai_client: Option<&'a OpenAiCompat>,
+    embedding_client: &'a EmbeddingClient,
+    fallback_chain: &'a [String],
     chinese_priority: bool,
+}
+
+async fn scrape_with_fallback(
+    request: ScrapeRequest<'_>,
+    context: &ScrapeContext<'_>,
 ) -> Option<ScrapeResult> {
-    for source in fallback_chain {
+    for source in context.fallback_chain {
         let result = match source.trim().to_ascii_lowercase().as_str() {
-            "local" => local::find_nfo(path).and_then(|nfo_path| local::read_nfo(&nfo_path)),
+            "local" => {
+                local::find_nfo(request.path).and_then(|nfo_path| local::read_nfo(&nfo_path))
+            }
             "tmdb" => {
-                if matches!(media_type, MediaType::Movie | MediaType::TvShow) {
-                    if let Some(parsed) = parsed.as_ref() {
-                        let lang = if chinese_priority {
+                if matches!(request.media_type, MediaType::Movie | MediaType::TvShow) {
+                    if let Some(parsed) = request.parsed.as_ref() {
+                        let lang = if context.chinese_priority {
                             Some("zh-CN")
                         } else {
                             None
                         };
                         // Fetch multiple candidates for embedding reranking
-                        let candidates = match media_type {
-                            MediaType::Movie => tmdb
+                        let candidates = match request.media_type {
+                            MediaType::Movie => context
+                                .tmdb
                                 .search_movie_candidates(&parsed.raw_title, parsed.year, lang, 5)
                                 .await
                                 .ok()
                                 .unwrap_or_default(),
-                            MediaType::TvShow => tmdb
+                            MediaType::TvShow => context
+                                .tmdb
                                 .search_tv_candidates(&parsed.raw_title, parsed.year, lang, 5)
                                 .await
                                 .ok()
@@ -151,14 +165,14 @@ async fn scrape_with_fallback(
                             candidates.into_iter().next()
                         } else if candidates.len() > 1 {
                             // Use embedding reranking if configured
-                            if embedding_client.is_configured() {
+                            if context.embedding_client.is_configured() {
                                 let query = format!(
                                     "{} {}",
                                     parsed.raw_title,
                                     parsed.year.map(|y| y.to_string()).unwrap_or_default()
                                 );
                                 if let Ok(ranked) =
-                                    embedding_client.rerank(&query, &candidates).await
+                                    context.embedding_client.rerank(&query, &candidates).await
                                 {
                                     if let Some((best_idx, _)) = ranked.first() {
                                         candidates.get(*best_idx).cloned()
@@ -175,13 +189,14 @@ async fn scrape_with_fallback(
                             None
                         };
 
-                        if media_type == MediaType::TvShow {
+                        if request.media_type == MediaType::TvShow {
                             if let Some(base) = selected {
                                 if let (Some(season), Some(episode)) =
                                     (parsed.season, parsed.episode)
                                 {
                                     if let Some(tmdb_id) = base.tmdb_id {
-                                        if let Ok(Some(ep_result)) = tmdb
+                                        if let Ok(Some(ep_result)) = context
+                                            .tmdb
                                             .get_episode_with_lang(tmdb_id, season, episode, lang)
                                             .await
                                         {
@@ -215,19 +230,21 @@ async fn scrape_with_fallback(
                 }
             }
             "musicbrainz" => {
-                if matches!(media_type, MediaType::Music) {
-                    if let Some(parsed) = parsed.as_ref() {
-                        mb.search_recording(
-                            parsed
-                                .raw_title
-                                .split('.')
-                                .next()
-                                .unwrap_or(&parsed.raw_title),
-                            &parsed.raw_title,
-                        )
-                        .await
-                        .ok()
-                        .flatten()
+                if matches!(request.media_type, MediaType::Music) {
+                    if let Some(parsed) = request.parsed.as_ref() {
+                        context
+                            .mb
+                            .search_recording(
+                                parsed
+                                    .raw_title
+                                    .split('.')
+                                    .next()
+                                    .unwrap_or(&parsed.raw_title),
+                                &parsed.raw_title,
+                            )
+                            .await
+                            .ok()
+                            .flatten()
                     } else {
                         None
                     }
@@ -236,9 +253,14 @@ async fn scrape_with_fallback(
                 }
             }
             "openlibrary" | "ol" => {
-                if matches!(media_type, MediaType::Novel) {
-                    if let Some(parsed) = parsed.as_ref() {
-                        ol.search(&parsed.raw_title, None).await.ok().flatten()
+                if matches!(request.media_type, MediaType::Novel) {
+                    if let Some(parsed) = request.parsed.as_ref() {
+                        context
+                            .ol
+                            .search(&parsed.raw_title, None)
+                            .await
+                            .ok()
+                            .flatten()
                     } else {
                         None
                     }
@@ -247,24 +269,26 @@ async fn scrape_with_fallback(
                 }
             }
             "ai" => {
-                if let Some(client) = ai_client {
-                    let filename = path
+                if let Some(client) = context.ai_client {
+                    let filename = request
+                        .path
                         .file_name()
                         .map(|f| f.to_string_lossy().to_string())
                         .unwrap_or_default();
                     if let Some(result) = client.identify(&filename).await.ok().flatten() {
                         // Try to refine title via suggest_title and re-search TMDB
-                        if matches!(media_type, MediaType::Movie | MediaType::TvShow) {
+                        if matches!(request.media_type, MediaType::Movie | MediaType::TvShow) {
                             if let Ok(Some(better_title)) =
                                 client.suggest_title(&filename, &result.title).await
                             {
-                                let lang = if chinese_priority {
+                                let lang = if context.chinese_priority {
                                     Some("zh-CN")
                                 } else {
                                     None
                                 };
-                                let re_search = match media_type {
-                                    MediaType::Movie => tmdb
+                                let re_search = match request.media_type {
+                                    MediaType::Movie => context
+                                        .tmdb
                                         .search_movie_candidates(
                                             &better_title,
                                             result.year,
@@ -274,7 +298,8 @@ async fn scrape_with_fallback(
                                         .await
                                         .ok()
                                         .and_then(|c| c.into_iter().next()),
-                                    MediaType::TvShow => tmdb
+                                    MediaType::TvShow => context
+                                        .tmdb
                                         .search_tv_candidates(&better_title, result.year, lang, 1)
                                         .await
                                         .ok()
@@ -299,7 +324,7 @@ async fn scrape_with_fallback(
                     None
                 }
             }
-            "guess" => parsed.as_ref().and_then(guess_from_parsed),
+            "guess" => request.parsed.as_ref().and_then(guess_from_parsed),
             _ => None,
         };
 
@@ -394,20 +419,27 @@ mod tests {
         let tmdb = TmdbScraper::new(&ApiConfig::default());
         let mb = MusicBrainzScraper::new(&ApiConfig::default());
         let ol = OpenLibraryScraper::new();
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let ai_client = OpenAiCompat::from_config(&AiConfig::default());
+        let embedding_client = EmbeddingClient::from_config(&AiConfig::default());
+        let fallback_chain = ["guess".to_string()];
+        let rt = crate::core::runtime::build().expect("runtime");
 
-        let result = rt.block_on(scrape_with_fallback(
-            std::path::Path::new("/tmp/Arrival.2016.mkv"),
-            &Some(parsed),
-            MediaType::Movie,
-            &tmdb,
-            &mb,
-            &ol,
-            Some(&OpenAiCompat::from_config(&AiConfig::default())),
-            &EmbeddingClient::from_config(&AiConfig::default()),
-            &["guess".into()],
-            false,
-        ));
+        let request = ScrapeRequest {
+            path: std::path::Path::new("/tmp/Arrival.2016.mkv"),
+            parsed: &Some(parsed),
+            media_type: MediaType::Movie,
+        };
+        let context = ScrapeContext {
+            tmdb: &tmdb,
+            mb: &mb,
+            ol: &ol,
+            ai_client: Some(&ai_client),
+            embedding_client: &embedding_client,
+            fallback_chain: &fallback_chain,
+            chinese_priority: false,
+        };
+
+        let result = rt.block_on(scrape_with_fallback(request, &context));
 
         assert!(result.is_some());
         let result = result.unwrap();

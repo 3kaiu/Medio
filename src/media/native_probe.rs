@@ -51,13 +51,10 @@ impl NativeProbe {
                 mp4parse::TrackType::Video => {
                     if let Some(stsd) = track.stsd {
                         for entry in stsd.descriptions {
-                            match entry {
-                                mp4parse::SampleEntry::Video(v) => {
-                                    info.width = Some(v.width as u32);
-                                    info.height = Some(v.height as u32);
-                                    info.video_codec = Some(format!("{:?}", v.codec_type));
-                                }
-                                _ => {}
+                            if let mp4parse::SampleEntry::Video(v) = entry {
+                                info.width = Some(v.width as u32);
+                                info.height = Some(v.height as u32);
+                                info.video_codec = Some(format!("{:?}", v.codec_type));
                             }
                         }
                     }
@@ -65,13 +62,10 @@ impl NativeProbe {
                 mp4parse::TrackType::Audio => {
                     if let Some(stsd) = track.stsd {
                         for entry in stsd.descriptions {
-                            match entry {
-                                mp4parse::SampleEntry::Audio(a) => {
-                                    info.audio_codec = Some(format!("{:?}", a.codec_type));
-                                    info.audio_bitrate =
-                                        Some(a.samplerate as u64 * a.channelcount as u64 * 16);
-                                }
-                                _ => {}
+                            if let mp4parse::SampleEntry::Audio(a) = entry {
+                                info.audio_codec = Some(format!("{:?}", a.codec_type));
+                                info.audio_bitrate =
+                                    Some(a.samplerate as u64 * a.channelcount as u64 * 16);
                             }
                         }
                     }
@@ -131,14 +125,13 @@ impl NativeProbe {
             let format_opts = symphonia::core::formats::FormatOptions::default();
             if let Ok(probed) =
                 symphonia::default::get_probe().format(&hint, mss, &format_opts, &meta_opts)
+                && let Some(track) = probed.format.default_track()
             {
-                if let Some(track) = probed.format.default_track() {
-                    let params = &track.codec_params;
-                    info.audio_codec = Some(format!("{:?}", params.codec));
-                    info.duration_secs = params
-                        .time_base
-                        .and_then(|tb| params.n_frames.map(|f| tb.calc_time(f).seconds as u64));
-                }
+                let params = &track.codec_params;
+                info.audio_codec = Some(format!("{:?}", params.codec));
+                info.duration_secs = params
+                    .time_base
+                    .and_then(|tb| params.n_frames.map(|f| tb.calc_time(f).seconds));
             }
         }
 

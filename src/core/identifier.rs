@@ -154,7 +154,7 @@ impl Identifier {
         if let Some(caps) = RE.captures(cleaned) {
             let raw_title = clean_title(caps.get(1)?.as_str());
             let year: u16 = caps.get(2)?.as_str().parse().ok()?;
-            if year < 1900 || year > 2030 {
+            if !(1900..=2030).contains(&year) {
                 return None;
             }
             let suffix_start = caps.get(2)?.end();
@@ -221,7 +221,7 @@ impl Identifier {
 fn clean_title(s: &str) -> String {
     static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s+").unwrap());
     let s = s.trim();
-    let s = s.trim_end_matches(|c: char| c == '.' || c == '-' || c == '_' || c == ' ');
+    let s = s.trim_end_matches(['.', '-', '_', ' ']);
     RE.replace_all(s, " ").to_string()
 }
 
@@ -255,34 +255,34 @@ fn extract_media_tags(s: &str) -> MediaTags {
     let mut release_group = None;
 
     for caps in RE.captures_iter(s) {
-        if let Some(m) = caps.name("res") {
-            if resolution.is_none() {
-                resolution = Some(m.as_str().to_uppercase());
-            }
+        if let Some(m) = caps.name("res")
+            && resolution.is_none()
+        {
+            resolution = Some(m.as_str().to_uppercase());
         }
-        if let Some(m) = caps.name("codec") {
-            if codec.is_none() {
-                let upper = m.as_str().to_uppercase();
-                codec = Some(match upper.as_str() {
-                    "HEVC" => "H.265".into(),
-                    other => other.into(),
-                });
-            }
+        if let Some(m) = caps.name("codec")
+            && codec.is_none()
+        {
+            let upper = m.as_str().to_uppercase();
+            codec = Some(match upper.as_str() {
+                "HEVC" => "H.265".into(),
+                other => other.into(),
+            });
         }
-        if let Some(m) = caps.name("src") {
-            if source.is_none() {
-                source = Some(m.as_str().to_string());
-            }
+        if let Some(m) = caps.name("src")
+            && source.is_none()
+        {
+            source = Some(m.as_str().to_string());
         }
-        if let Some(m) = caps.name("audio") {
-            if audio.is_none() {
-                audio = Some(m.as_str().to_string());
-            }
+        if let Some(m) = caps.name("audio")
+            && audio.is_none()
+        {
+            audio = Some(m.as_str().to_string());
         }
-        if let Some(m) = caps.name("group") {
-            if release_group.is_none() {
-                release_group = Some(m.as_str().to_string());
-            }
+        if let Some(m) = caps.name("group")
+            && release_group.is_none()
+        {
+            release_group = Some(m.as_str().to_string());
         }
     }
 

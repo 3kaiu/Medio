@@ -27,25 +27,27 @@ All-in-one media toolkit: FileBot + TinyMediaManager + dupeGuru in a single bina
 
 ## 🚀 Quick Start
 
-Install via Homebrew
+Current stable install path
 
 ```
-brew tap 3kaiu/medio
-brew install medio
-```
-
-Or via script
-
-```
-# Optional: -s latest for main branch, -s 0.1.0 for specific version
 curl -fsSL https://raw.githubusercontent.com/3kaiu/Medio/main/install.sh | bash
 ```
 
-Or from source
+The installer tries a matching GitHub release first and falls back to a local source build when no release asset is available for your platform.
+
+Install from source
 
 ```
-cargo install medio --git https://github.com/3kaiu/Medio
+cargo install --git https://github.com/3kaiu/Medio
 ```
+
+Homebrew
+
+```
+brew install --HEAD ./Formula/medio.rb
+```
+
+The bundled formula is a local `--HEAD` formula for contributors. This repository does not currently publish a public tap.
 
 ## 📖 Usage
 
@@ -90,6 +92,10 @@ me config --init   # Interactive wizard (TMDB key, AI, organize root)
 ```
 
 Config file: `~/.config/medio/config.toml`
+
+`me config` is read-only. It reports whether the config exists and shows the current status. Use `me config --init` to create or update the file.
+
+On macOS, the default path is `~/Library/Application Support/medio/config.toml`. On Linux, it is usually `~/.config/medio/config.toml`.
 
 Key settings:
 

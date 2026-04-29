@@ -45,7 +45,13 @@ pub fn run(path: &str, config: &AppConfig, json_output: bool, process: bool, wit
 
         // Step 4: Optional scrape
         if with_scrape {
-            let rt = tokio::runtime::Runtime::new().unwrap();
+            let rt = match crate::core::runtime::build() {
+                Ok(rt) => rt,
+                Err(err) => {
+                    eprintln!("{err}");
+                    return;
+                }
+            };
             rt.block_on(async {
                 scraper::populate_scrape_results(&mut items, config).await;
             });

@@ -43,9 +43,9 @@ pub fn init(enabled: bool) {
 
 /// Log a file operation action.
 pub fn log(action: &str) {
-    if let Ok(guard) = OP_LOG.lock() {
-        if let Some(ref op_log) = *guard {
-            op_log.log(action);
-        }
+    if let Ok(guard) = OP_LOG.lock()
+        && let Some(ref op_log) = *guard
+    {
+        op_log.log(action);
     }
 }

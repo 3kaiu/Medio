@@ -146,7 +146,7 @@ impl OpenAiCompat {
 
         let resp = self
             .client
-            .post(&format!(
+            .post(format!(
                 "{}/chat/completions",
                 self.url.trim_end_matches('/')
             ))
@@ -181,12 +181,11 @@ fn extract_json(s: &str) -> String {
         }
     }
     // Try to find raw { ... } block
-    if let Some(start) = s.find('{') {
-        if let Some(end) = s.rfind('}') {
-            if end > start {
-                return s[start..=end].to_string();
-            }
-        }
+    if let Some(start) = s.find('{')
+        && let Some(end) = s.rfind('}')
+        && end > start
+    {
+        return s[start..=end].to_string();
     }
     String::new()
 }

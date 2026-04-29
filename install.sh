@@ -16,11 +16,11 @@ log_warning() { echo -e "${YELLOW}!${NC} $1"; }
 log_error()   { echo -e "${RED}✗${NC} $1"; }
 
 INSTALL_DIR="/usr/local/bin"
-CONFIG_DIR="$HOME/.config/medio"
 REPO="3kaiu/Medio"
 BINARY="medio"
 ALIAS="me"
 VERSION=""
+DOWNLOAD_SOURCE=""
 
 # Parse args
 SOURCE="latest"
@@ -42,7 +42,7 @@ get_latest_version() {
     local tag
     tag=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
         | grep '"tag_name"' | head -1 | sed -E 's/.*"v?([^"]+)".*/\1/')
-    echo "${tag:-0.1.0}"
+    echo "${tag}"
 }
 
 get_arch_suffix() {
@@ -71,38 +71,43 @@ download_release() {
 
     local url="https://github.com/${REPO}/releases/download/v${version}/${BINARY}-${os}-${arch}"
 
-    log_info "Downloading ${BINARY} v${version} for ${os}-${arch}..."
+    log_info "Trying prebuilt release ${BINARY} v${version} for ${os}-${arch}..."
 
     if curl -fsSL --connect-timeout 10 --max-time 120 -o "$target" "$url"; then
         chmod +x "$target"
         xattr -c "$target" 2>/dev/null || true
+        DOWNLOAD_SOURCE="release"
         log_success "Downloaded ${BINARY} v${version}"
         return 0
     fi
 
-    log_error "Failed to download ${BINARY} v${version}"
+    log_warning "Prebuilt download unavailable: ${url}"
     return 1
 }
 
 build_from_source() {
     local target="$1"
+    local tmpdir=""
 
     if ! command -v cargo > /dev/null 2>&1; then
         log_error "cargo not found. Install Rust: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
         return 1
     fi
 
-    log_info "Building ${BINARY} from source..."
+    log_info "Falling back to source build for ${BINARY}..."
 
-    local tmpdir
     tmpdir=$(mktemp -d)
-    trap 'rm -rf "$tmpdir"' EXIT
+    trap 'rm -rf "$tmpdir"' RETURN
 
-    git clone --depth 1 "https://github.com/${REPO}.git" "$tmpdir/medio" 2>/dev/null
+    if ! git clone --depth 1 "https://github.com/${REPO}.git" "$tmpdir/medio" 2>/dev/null; then
+        log_error "Failed to clone source repository"
+        return 1
+    fi
 
     if (cd "$tmpdir/medio" && cargo build --release --quiet 2>/dev/null); then
         cp "$tmpdir/medio/target/release/${BINARY}" "$target"
         chmod +x "$target"
+        DOWNLOAD_SOURCE="source"
         log_success "Built ${BINARY} from source"
         return 0
     fi
@@ -117,6 +122,9 @@ install_binary() {
     if [[ -z "$VERSION" ]]; then
         if [[ "$SOURCE" == "latest" ]]; then
             VERSION=$(get_latest_version)
+            if [[ -z "$VERSION" ]]; then
+                log_warning "No GitHub release found for ${REPO}. Skipping prebuilt download."
+            fi
         else
             VERSION="$SOURCE"
         fi
@@ -131,7 +139,7 @@ install_binary() {
     local tmpfile
     tmpfile=$(mktemp)
 
-    if download_release "$VERSION" "$os" "$arch" "$tmpfile"; then
+    if [[ -n "$VERSION" ]] && download_release "$VERSION" "$os" "$arch" "$tmpfile"; then
         if needs_sudo; then
             log_info "Admin access required for ${INSTALL_DIR}"
             sudo -v
@@ -151,11 +159,16 @@ install_binary() {
         rm -f "$tmpfile"
     else
         rm -f "$tmpfile"
-        log_error "Installation failed. Try: cargo install medio --git https://github.com/${REPO}"
+        log_error "Installation failed after trying prebuilt release and source build."
+        log_error "Try: cargo install --git https://github.com/${REPO}"
         exit 1
     fi
 
-    log_success "Installed ${BINARY} to ${target}"
+    if [[ -n "$DOWNLOAD_SOURCE" ]]; then
+        log_success "Installed ${BINARY} to ${target} via ${DOWNLOAD_SOURCE}"
+    else
+        log_success "Installed ${BINARY} to ${target}"
+    fi
 }
 
 install_alias() {
@@ -173,10 +186,6 @@ EOF"
     maybe_sudo mv -f "${target}.new" "$target"
 
     log_success "Installed ${ALIAS} alias (run 'me' instead of 'medio')"
-}
-
-setup_config_dir() {
-    mkdir -p "$CONFIG_DIR"
 }
 
 verify_install() {
@@ -201,7 +210,6 @@ echo ""
 
 install_binary
 install_alias
-setup_config_dir
 verify_install
 
 echo ""

@@ -104,7 +104,7 @@ pub enum Commands {
     /// Interactive TUI
     Tui,
 
-    /// Open/edit config file
+    /// Show config status or initialize config
     Config {
         /// Initialize config with interactive wizard
         #[arg(long)]

@@ -22,7 +22,7 @@ fn main() {
         .init();
 
     // Load config
-    let mut config = AppConfig::load().unwrap_or_else(|e| {
+    let mut config = AppConfig::load_or_default().unwrap_or_else(|e| {
         tracing::warn!("Failed to load config: {e}, using defaults");
         AppConfig::default()
     });
@@ -66,12 +66,14 @@ fn main() {
             cli::commands::organize::run(
                 &path,
                 &config,
-                &mode,
-                with_nfo,
-                with_images,
-                &link,
-                cli.dry_run,
-                cli.json,
+                cli::commands::organize::OrganizeOptions {
+                    mode: &mode,
+                    with_nfo,
+                    with_images,
+                    link: &link,
+                    dry_run: cli.dry_run,
+                    json_output: cli.json,
+                },
             );
         }
         Commands::Analyze { path } => {
@@ -87,11 +89,8 @@ fn main() {
             } else {
                 println!("Config file: {}", path.display());
                 if !path.exists() {
-                    let default_config = AppConfig::default();
-                    match default_config.save() {
-                        Ok(()) => println!("Default config created at {}", path.display()),
-                        Err(e) => eprintln!("Error creating config: {e}"),
-                    }
+                    println!("  Status: not initialized");
+                    println!("  Run `medio config --init` to create it.");
                 } else {
                     // Show current config summary
                     let config = AppConfig::load().unwrap_or_default();

@@ -103,7 +103,13 @@ pub fn run(path: &str, config: &AppConfig, dry_run: bool, json_output: bool, pro
         }
     }
 
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = match crate::core::runtime::build() {
+        Ok(rt) => rt,
+        Err(err) => {
+            eprintln!("{err}");
+            return;
+        }
+    };
     let actions = rt
         .block_on(deduplicator.execute(&groups, &items, is_dry))
         .unwrap_or_else(|e| vec![format!("Error: {e}")]);

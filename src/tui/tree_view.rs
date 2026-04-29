@@ -41,7 +41,7 @@ pub fn draw_tree(f: &mut Frame, items: &[&MediaItem], selected: usize, area: Rec
             };
             list_items.push(ListItem::new(Line::from(vec![
                 Span::styled("  ", Style::default()),
-                Span::styled(format!("{name}"), style),
+                Span::styled(name.to_string(), style),
             ])));
         }
     }

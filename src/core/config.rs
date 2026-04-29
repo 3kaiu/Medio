@@ -2,7 +2,7 @@ use crate::core::types::{AiProvider, DupAction, KeepStrategy, LinkMode, Organize
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AppConfig {
     #[serde(default)]
     pub general: GeneralConfig,
@@ -107,7 +107,7 @@ pub struct CustomAiConfig {
     pub model: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ApiConfig {
     #[serde(default)]
     pub tmdb_key: String,
@@ -365,14 +365,6 @@ impl Default for AiConfig {
         }
     }
 }
-impl Default for ApiConfig {
-    fn default() -> Self {
-        Self {
-            tmdb_key: String::new(),
-            musicbrainz_user_agent: String::new(),
-        }
-    }
-}
 impl Default for ScrapeConfig {
     fn default() -> Self {
         Self {
@@ -436,23 +428,6 @@ impl Default for CacheConfig {
         }
     }
 }
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            general: GeneralConfig::default(),
-            scan: ScanConfig::default(),
-            ai: AiConfig::default(),
-            api: ApiConfig::default(),
-            scrape: ScrapeConfig::default(),
-            dedup: DedupConfig::default(),
-            rename: RenameConfig::default(),
-            organize: OrganizeConfig::default(),
-            quality: QualityConfig::default(),
-            cache: CacheConfig::default(),
-        }
-    }
-}
-
 impl CloudflareConfig {
     pub fn base_url(&self) -> String {
         let mut url = self.url.trim_end_matches('/').to_string();
@@ -487,21 +462,24 @@ impl AppConfig {
         }
     }
 
-    /// 加载配置，不存在则生成默认配置
+    /// Load an existing config file.
     pub fn load() -> Result<Self, Box<dyn std::error::Error>> {
         let path = Self::config_path();
-        if path.exists() {
-            let content = std::fs::read_to_string(&path)?;
-            let config: AppConfig = toml::from_str(&content)?;
-            Ok(config)
-        } else {
-            let config = AppConfig::default();
-            if let Err(err) = config.save() {
-                if !is_permission_error(&err) {
-                    return Err(err);
+        let content = std::fs::read_to_string(&path)?;
+        let config: AppConfig = toml::from_str(&content)?;
+        Ok(config)
+    }
+
+    /// Load config when present, otherwise use defaults without creating a file.
+    pub fn load_or_default() -> Result<Self, Box<dyn std::error::Error>> {
+        match Self::load() {
+            Ok(config) => Ok(config),
+            Err(err) => match err.downcast_ref::<std::io::Error>() {
+                Some(io_err) if io_err.kind() == std::io::ErrorKind::NotFound => {
+                    Ok(Self::default())
                 }
-            }
-            Ok(config)
+                _ => Err(err),
+            },
         }
     }
 
@@ -515,10 +493,4 @@ impl AppConfig {
         std::fs::write(&path, content)?;
         Ok(())
     }
-}
-
-fn is_permission_error(err: &Box<dyn std::error::Error>) -> bool {
-    err.downcast_ref::<std::io::Error>()
-        .map(|io_err| matches!(io_err.kind(), std::io::ErrorKind::PermissionDenied))
-        .unwrap_or(false)
 }

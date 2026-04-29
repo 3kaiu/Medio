@@ -30,7 +30,13 @@ pub fn run(path: &str, config: &AppConfig, dry_run: bool, json_output: bool) {
     }
 
     // Step 2: Scrape metadata so renaming can use authoritative titles
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = match crate::core::runtime::build() {
+        Ok(rt) => rt,
+        Err(err) => {
+            eprintln!("{err}");
+            return;
+        }
+    };
     rt.block_on(async {
         scraper::populate_scrape_results(&mut items, config).await;
     });
@@ -56,16 +62,16 @@ pub fn run(path: &str, config: &AppConfig, dry_run: bool, json_output: bool) {
     // Step 4: Execute or preview
     let is_dry = dry_run || config.general.dry_run;
 
-    if !is_dry && config.general.confirm {
-        if !dialoguer::Confirm::new()
+    if !is_dry
+        && config.general.confirm
+        && !dialoguer::Confirm::new()
             .with_prompt(format!("{} files will be renamed. Proceed?", plans.len()))
             .default(false)
             .interact()
             .unwrap_or(false)
-        {
-            println!("Aborted.");
-            return;
-        }
+    {
+        println!("Aborted.");
+        return;
     }
 
     let actions = renamer.execute(&plans, is_dry);

@@ -2,13 +2,13 @@ use crate::tui::app::{App, Mode, Tab};
 use crossterm::event::{self, Event, KeyCode, KeyEvent};
 
 pub fn handle_events(app: &mut App) -> std::io::Result<bool> {
-    if event::poll(std::time::Duration::from_millis(100))? {
-        if let Event::Key(key) = event::read()? {
-            match app.mode {
-                Mode::Normal => handle_normal(app, key),
-                Mode::Search => handle_search(app, key),
-                Mode::Confirm => handle_confirm(app, key),
-            }
+    if event::poll(std::time::Duration::from_millis(100))?
+        && let Event::Key(key) = event::read()?
+    {
+        match app.mode {
+            Mode::Normal => handle_normal(app, key),
+            Mode::Search => handle_search(app, key),
+            Mode::Confirm => handle_confirm(app, key),
         }
     }
     Ok(!app.should_quit)
@@ -131,7 +131,7 @@ fn handle_search(app: &mut App, key: KeyEvent) {
         }
         KeyCode::Enter => {
             app.mode = Mode::Normal;
-            let count = app.filtered_items().len();
+            let count = app.current_len();
             app.status_msg = format!("Found {count} results");
         }
         KeyCode::Backspace => {

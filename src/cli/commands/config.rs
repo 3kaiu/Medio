@@ -1,21 +1,20 @@
-use std::path::PathBuf;
+use std::path::Path;
 
-pub fn run_init(config_path: &PathBuf) {
+pub fn run_init(config_path: &Path) {
     println!("medio config init — Interactive Configuration Wizard");
     println!();
 
     // Ensure config directory exists
-    if let Some(parent) = config_path.parent() {
-        if !parent.exists() {
-            std::fs::create_dir_all(parent).unwrap_or_else(|e| {
-                eprintln!("Error creating config directory: {e}");
-                return;
-            });
-        }
+    if let Some(parent) = config_path.parent()
+        && !parent.exists()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        eprintln!("Error creating config directory: {e}");
+        return;
     }
 
     // Load existing or default config
-    let mut config = crate::core::config::AppConfig::load().unwrap_or_default();
+    let mut config = crate::core::config::AppConfig::load_or_default().unwrap_or_default();
 
     // TMDB
     println!("1. TMDB API Key (for movie/TV metadata)");

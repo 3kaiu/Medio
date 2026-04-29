@@ -39,9 +39,9 @@ pub enum ViewMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PendingAction {
-    RenameExecute,
-    DedupExecute,
-    OrganizeExecute,
+    Rename,
+    Dedup,
+    Organize,
 }
 
 struct FilteredCache {
@@ -134,7 +134,13 @@ impl App {
         }
 
         // Shared scrape path
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = match crate::core::runtime::build() {
+            Ok(rt) => rt,
+            Err(err) => {
+                self.status_msg = err;
+                return;
+            }
+        };
         rt.block_on(async {
             scraper::populate_scrape_results(&mut self.items, &self.config).await;
         });
@@ -386,7 +392,7 @@ impl App {
             self.status_msg = "No rename plans to execute".into();
             return;
         }
-        self.pending_action = Some(PendingAction::RenameExecute);
+        self.pending_action = Some(PendingAction::Rename);
         self.mode = Mode::Confirm;
         self.status_msg = format!(
             "Execute {} rename plans? [Enter/y=yes, n/Esc=no]",
@@ -408,7 +414,7 @@ impl App {
             self.status_msg = "No duplicate items marked for removal".into();
             return;
         }
-        self.pending_action = Some(PendingAction::DedupExecute);
+        self.pending_action = Some(PendingAction::Dedup);
         self.mode = Mode::Confirm;
         self.status_msg = format!(
             "Execute dedup for {} files? [Enter/y=yes, n/Esc=no]",
@@ -421,7 +427,7 @@ impl App {
             self.status_msg = "No organize plans to execute".into();
             return;
         }
-        self.pending_action = Some(PendingAction::OrganizeExecute);
+        self.pending_action = Some(PendingAction::Organize);
         self.mode = Mode::Confirm;
         self.status_msg = format!(
             "Execute {} organize plans? [Enter/y=yes, n/Esc=no]",
@@ -431,7 +437,7 @@ impl App {
 
     pub fn confirm_pending_action(&mut self) {
         match self.pending_action.take() {
-            Some(PendingAction::RenameExecute) => {
+            Some(PendingAction::Rename) => {
                 let renamer = Renamer::new(self.config.rename.clone());
                 let dry_run = self.config.general.dry_run;
                 let actions = renamer.execute(&self.rename_plans, dry_run);
@@ -446,10 +452,17 @@ impl App {
                     self.status_msg = format!("Rename executed: {} actions", renamed);
                 }
             }
-            Some(PendingAction::DedupExecute) => {
+            Some(PendingAction::Dedup) => {
                 let deduplicator = Deduplicator::new(self.config.dedup.clone());
                 let dry_run = self.config.general.dry_run;
-                let rt = tokio::runtime::Runtime::new().unwrap();
+                let rt = match crate::core::runtime::build() {
+                    Ok(rt) => rt,
+                    Err(err) => {
+                        self.mode = Mode::Normal;
+                        self.status_msg = err;
+                        return;
+                    }
+                };
                 let actions = rt
                     .block_on(deduplicator.execute(&self.dedup_groups, &self.items, dry_run))
                     .unwrap_or_else(|e| vec![format!("Error: {e}")]);
@@ -469,7 +482,7 @@ impl App {
                     self.status_msg = format!("Dedup executed: {} actions", processed);
                 }
             }
-            Some(PendingAction::OrganizeExecute) => {
+            Some(PendingAction::Organize) => {
                 let organizer = Organizer::new(self.config.organize.clone());
                 let dry_run = self.config.general.dry_run;
                 let actions = organizer.execute(&self.organize_plans, dry_run);
@@ -558,7 +571,7 @@ mod tests {
         app.request_rename_execute();
 
         assert_eq!(app.mode, Mode::Confirm);
-        assert_eq!(app.pending_action, Some(PendingAction::RenameExecute));
+        assert_eq!(app.pending_action, Some(PendingAction::Rename));
     }
 
     #[test]
@@ -603,7 +616,7 @@ mod tests {
         app.request_dedup_execute();
 
         assert_eq!(app.mode, Mode::Confirm);
-        assert_eq!(app.pending_action, Some(PendingAction::DedupExecute));
+        assert_eq!(app.pending_action, Some(PendingAction::Dedup));
     }
 
     #[test]
@@ -649,7 +662,7 @@ mod tests {
         app.request_organize_execute();
 
         assert_eq!(app.mode, Mode::Confirm);
-        assert_eq!(app.pending_action, Some(PendingAction::OrganizeExecute));
+        assert_eq!(app.pending_action, Some(PendingAction::Organize));
     }
 
     #[test]

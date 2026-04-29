@@ -35,11 +35,11 @@ impl Renamer {
                 let mut attached = Vec::new();
                 let mut seen = HashSet::new();
                 for dir in parent_chain(&plan.old_path) {
-                    if let Some(dir_plan) = by_source.get(dir) {
-                        if seen.insert(dir_plan.old_path.clone()) {
-                            assigned.insert(dir_plan.old_path.clone());
-                            attached.push(dir_plan.clone());
-                        }
+                    if let Some(dir_plan) = by_source.get(dir)
+                        && seen.insert(dir_plan.old_path.clone())
+                    {
+                        assigned.insert(dir_plan.old_path.clone());
+                        attached.push(dir_plan.clone());
                     }
                 }
                 attached.sort_by_key(|plan| std::cmp::Reverse(plan.old_path.components().count()));
@@ -154,7 +154,10 @@ impl Renamer {
         // Base values from parsed info
         if let Some(p) = &item.parsed {
             ctx.insert("title".into(), p.raw_title.clone());
-            ctx.insert("year".into(), p.year.map(|y| y.to_string()).unwrap_or_default());
+            ctx.insert(
+                "year".into(),
+                p.year.map(|y| y.to_string()).unwrap_or_default(),
+            );
             ctx.insert(
                 "season".into(),
                 p.season
@@ -181,15 +184,24 @@ impl Renamer {
                 "e".into(),
                 p.episode.map(|e| format!("{e:02}")).unwrap_or_default(),
             );
-            ctx.insert("resolution".into(), p.resolution.clone().unwrap_or_default());
+            ctx.insert(
+                "resolution".into(),
+                p.resolution.clone().unwrap_or_default(),
+            );
             ctx.insert("codec".into(), p.codec.clone().unwrap_or_default());
             ctx.insert("source".into(), p.source.clone().unwrap_or_default());
             ctx.insert(
                 "release_group".into(),
                 p.release_group.clone().unwrap_or_default(),
             );
-            ctx.insert("media_suffix".into(), p.media_suffix.clone().unwrap_or_default());
-            ctx.insert("parse_source".into(), format!("{:?}", p.parse_source).to_lowercase());
+            ctx.insert(
+                "media_suffix".into(),
+                p.media_suffix.clone().unwrap_or_default(),
+            );
+            ctx.insert(
+                "parse_source".into(),
+                format!("{:?}", p.parse_source).to_lowercase(),
+            );
         }
 
         // Scraped info overrides parsed values when available.
@@ -232,7 +244,10 @@ impl Renamer {
                     .unwrap_or_else(|| ctx.get("e").cloned().unwrap_or_default()),
             );
             ctx.insert("scraped_title".into(), s.title.clone());
-            ctx.insert("episode_name".into(), s.episode_name.clone().unwrap_or_default());
+            ctx.insert(
+                "episode_name".into(),
+                s.episode_name.clone().unwrap_or_default(),
+            );
             ctx.insert("ep_name".into(), s.episode_name.clone().unwrap_or_default());
             ctx.insert("artist".into(), s.artist.clone().unwrap_or_default());
             ctx.insert("album".into(), s.album.clone().unwrap_or_default());
@@ -580,8 +595,7 @@ fn is_seasonish_dir_name(name: &str) -> bool {
 }
 
 fn sanitize_name(s: &str) -> String {
-    static RE_MULTI_SPACE: Lazy<regex::Regex> =
-        Lazy::new(|| regex::Regex::new(r"\s+").unwrap());
+    static RE_MULTI_SPACE: Lazy<regex::Regex> = Lazy::new(|| regex::Regex::new(r"\s+").unwrap());
 
     let cleaned = s
         .chars()
@@ -591,9 +605,7 @@ fn sanitize_name(s: &str) -> String {
         })
         .collect::<String>();
 
-    RE_MULTI_SPACE
-        .replace_all(cleaned.trim(), " ")
-        .to_string()
+    RE_MULTI_SPACE.replace_all(cleaned.trim(), " ").to_string()
 }
 
 fn template_mentions_ext(template: &str) -> bool {
@@ -659,10 +671,7 @@ fn render_advanced_template(
 
     let media_suffix = ctx.get("media_suffix").cloned().unwrap_or_default();
     let mut working = template.to_string();
-    if preserve_media_suffix
-        && !media_suffix.is_empty()
-        && !working.contains("media_suffix")
-    {
+    if preserve_media_suffix && !media_suffix.is_empty() && !working.contains("media_suffix") {
         if RE_EXT.is_match(&working) {
             working = RE_EXT
                 .replace(&working, " - {{ media_suffix }}{{ ext }}")
@@ -676,7 +685,10 @@ fn render_advanced_template(
     for (key, value) in ctx {
         context.insert(key, value);
     }
-    context.insert("is_tv", &(ctx.get("is_tv").map(|v| v == "true").unwrap_or(false)));
+    context.insert(
+        "is_tv",
+        &(ctx.get("is_tv").map(|v| v == "true").unwrap_or(false)),
+    );
 
     Tera::one_off(&working, &context, false)
 }
@@ -862,9 +874,18 @@ mod tests {
         let mut config = make_config();
         config.movie_template = "{title} ({year}) - {media_suffix}".into();
         let renamer = Renamer::new(config);
-        let item = with_scraped_title(make_movie_item("Inception", Some(2010)), "盗梦空间", Some(2010));
+        let item = with_scraped_title(
+            make_movie_item("Inception", Some(2010)),
+            "盗梦空间",
+            Some(2010),
+        );
         let plans = renamer.plan(&[item]);
-        let new_name = plans[0].new_path.file_name().unwrap().to_string_lossy().to_string();
+        let new_name = plans[0]
+            .new_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
         assert_eq!(new_name, "盗梦空间 (2010) - 1080P.H.264.mp4");
     }
 
@@ -876,7 +897,12 @@ mod tests {
         let renamer = Renamer::new(config);
         let item = with_scraped_episode(make_tv_item("Breaking Bad", 1, 2), "绝命毒师", 1, 2);
         let plans = renamer.plan(&[item]);
-        let new_name = plans[0].new_path.file_name().unwrap().to_string_lossy().to_string();
+        let new_name = plans[0]
+            .new_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
         assert_eq!(new_name, "绝命毒师 - S01E02 - Pilot.mp4");
     }
 
@@ -1008,17 +1034,25 @@ mod tests {
         assert_eq!(plans.len(), 1);
         let dir_plans = &plans[0].directory_plans;
         assert_eq!(dir_plans.len(), 2);
-        assert_eq!(dir_plans[0].new_path, std::path::PathBuf::from("/tmp/9号秘事 1-9季(1)/Season 01"));
-        assert_eq!(dir_plans[1].new_path, std::path::PathBuf::from("/tmp/9号秘事"));
+        assert_eq!(
+            dir_plans[0].new_path,
+            std::path::PathBuf::from("/tmp/9号秘事 1-9季(1)/Season 01")
+        );
+        assert_eq!(
+            dir_plans[1].new_path,
+            std::path::PathBuf::from("/tmp/9号秘事")
+        );
     }
 
     #[test]
     fn test_movie_directory_plan_uses_title_and_year() {
         let renamer = Renamer::new(make_config());
-        let mut item = with_scraped_title(make_movie_item("noise", Some(2025)), "刺杀小说家2", Some(2025));
-        item.path = std::path::PathBuf::from(
-            "/tmp/刺z杀z小z说家2 (2025) 4K 高码 HDR/noise.mkv",
+        let mut item = with_scraped_title(
+            make_movie_item("noise", Some(2025)),
+            "刺杀小说家2",
+            Some(2025),
         );
+        item.path = std::path::PathBuf::from("/tmp/刺z杀z小z说家2 (2025) 4K 高码 HDR/noise.mkv");
 
         let plans = renamer.plan(&[item]);
         assert_eq!(plans.len(), 1);
