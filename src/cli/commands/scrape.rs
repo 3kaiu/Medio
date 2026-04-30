@@ -1,35 +1,27 @@
+use crate::cli::report::ScrapeCommandReport;
 use crate::core::config::AppConfig;
-use crate::core::context_infer::ContextInfer;
-use crate::core::identifier::Identifier;
-use crate::core::keyword_filter::KeywordFilter;
+use crate::core::pipeline::Pipeline;
 use crate::models::media::MediaItem;
-use crate::scraper;
 use std::path::Path;
 
 pub fn run(path: &str, config: &AppConfig, json_output: bool) {
     let root = Path::new(path);
-    if !root.exists() {
-        eprintln!("Error: path does not exist: {path}");
-        return;
-    }
+    let pipeline = Pipeline::new(config);
+    let mut state = match pipeline.load_or_scan(root) {
+        Ok(state) => state,
+        Err(err) => {
+            eprintln!("{err}");
+            return;
+        }
+    };
 
-    // Step 1: Load scan index or scan live
-    let mut items = super::load_scan_items_or_scan(root, config);
-
-    if items.is_empty() {
+    if state.items.is_empty() {
         println!("No media files found.");
         return;
     }
 
-    let keyword_filter = KeywordFilter::new(config.scan.keyword_filter.clone());
-    let identifier = Identifier::new(keyword_filter);
-    identifier.parse_batch(&mut items);
-
-    for item in items.iter_mut() {
-        ContextInfer::enrich_item(item);
-    }
-
-    // Step 2: Scrape metadata using fallback chain (concurrent)
+    pipeline.identify(&mut state);
+    pipeline.infer_context(&mut state);
     let rt = match crate::core::runtime::build() {
         Ok(rt) => rt,
         Err(err) => {
@@ -38,16 +30,22 @@ pub fn run(path: &str, config: &AppConfig, json_output: bool) {
         }
     };
     rt.block_on(async {
-        scraper::populate_scrape_results(&mut items, config).await;
+        pipeline.scrape(&mut state).await;
     });
 
-    // Output
     if json_output {
-        let json = serde_json::to_string_pretty(&items)
-            .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"));
+        let scraped_count = state.items.iter().filter(|i| i.scraped.is_some()).count();
+        let json = serde_json::to_string_pretty(&ScrapeCommandReport::new(
+            state.root.display().to_string(),
+            &state.item_source,
+            &state.stages,
+            &state.items,
+            scraped_count,
+        ))
+        .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"));
         println!("{json}");
     } else {
-        print_scrape_table(&items);
+        print_scrape_table(&state.items);
     }
 }
 

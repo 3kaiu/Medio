@@ -1,11 +1,11 @@
+use crate::cli::report::{
+    COMMAND_ORGANIZE, COMMAND_RENAME, ExecutionCommandReport, ExecutionSummary,
+};
 use crate::core::config::AppConfig;
-use crate::core::context_infer::ContextInfer;
-use crate::core::identifier::Identifier;
-use crate::core::keyword_filter::KeywordFilter;
+use crate::core::pipeline::Pipeline;
 use crate::core::types::{LinkMode, OrganizeMode};
 use crate::engine::organizer::Organizer;
 use crate::engine::renamer::Renamer;
-use crate::scraper;
 use std::path::Path;
 
 pub struct OrganizeOptions<'a> {
@@ -19,12 +19,8 @@ pub struct OrganizeOptions<'a> {
 
 pub fn run(path: &str, config: &AppConfig, options: OrganizeOptions<'_>) {
     let root = Path::new(path);
-    if !root.exists() {
-        eprintln!("Error: path does not exist: {path}");
-        return;
-    }
+    let pipeline = Pipeline::new(config);
 
-    // Parse mode
     let organize_mode = match options.mode.to_lowercase().as_str() {
         "rename" => OrganizeMode::Rename,
         "archive" => OrganizeMode::Archive,
@@ -45,7 +41,6 @@ pub fn run(path: &str, config: &AppConfig, options: OrganizeOptions<'_>) {
         _ => LinkMode::None,
     };
 
-    // Override config with CLI flags
     let mut org_config = config.organize.clone();
     if options.with_nfo {
         org_config.with_nfo = true;
@@ -54,23 +49,21 @@ pub fn run(path: &str, config: &AppConfig, options: OrganizeOptions<'_>) {
         org_config.with_images = true;
     }
 
-    // Step 1: Load scan index or scan live
-    let mut items = super::load_scan_items_or_scan(root, config);
+    let mut state = match pipeline.load_or_scan(root) {
+        Ok(state) => state,
+        Err(err) => {
+            eprintln!("{err}");
+            return;
+        }
+    };
 
-    if items.is_empty() {
+    if state.items.is_empty() {
         println!("No media files found.");
         return;
     }
 
-    let keyword_filter = KeywordFilter::new(config.scan.keyword_filter.clone());
-    let identifier = Identifier::new(keyword_filter);
-    identifier.parse_batch(&mut items);
-
-    for item in items.iter_mut() {
-        ContextInfer::enrich_item(item);
-    }
-
-    // Step 2: Scrape metadata for better organization
+    pipeline.identify(&mut state);
+    pipeline.infer_context(&mut state);
     let rt = match crate::core::runtime::build() {
         Ok(rt) => rt,
         Err(err) => {
@@ -79,192 +72,152 @@ pub fn run(path: &str, config: &AppConfig, options: OrganizeOptions<'_>) {
         }
     };
     rt.block_on(async {
-        scraper::populate_scrape_results(&mut items, config).await;
+        pipeline.scrape(&mut state).await;
     });
 
     if organize_mode == OrganizeMode::Rename {
         let renamer = Renamer::new(config.rename.clone());
-        let plans = renamer.plan(&items);
+        let plans = renamer.plan(&state.items);
 
         if plans.is_empty() {
             println!("No files need renaming.");
             return;
         }
 
-        if options.json_output {
-            let json = serde_json::to_string_pretty(&plans)
-                .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"));
-            println!("{json}");
-        } else {
-            print_rename_table(&plans);
+        if !options.json_output {
+            crate::cli::render::print_rename_table(&plans);
         }
 
         let is_dry = options.dry_run || config.general.dry_run;
+        let blocked = plans
+            .iter()
+            .filter(|plan| !plan.conflicts.is_empty())
+            .count();
         if !is_dry
             && config.general.confirm
             && !dialoguer::Confirm::new()
-                .with_prompt(format!("{} files will be renamed. Proceed?", plans.len()))
+                .with_prompt(format!(
+                    "{} rename plans ready, {} blocked by conflicts. Proceed?",
+                    plans.len().saturating_sub(blocked),
+                    blocked
+                ))
                 .default(false)
                 .interact()
                 .unwrap_or(false)
         {
+            if options.json_output {
+                let report = crate::engine::execution_report::ExecutionReport::new("rename");
+                let json = serde_json::to_string_pretty(&ExecutionCommandReport::new(
+                    COMMAND_RENAME,
+                    ExecutionSummary::from_rename_plans(&plans),
+                    &plans,
+                    &report,
+                    is_dry,
+                    true,
+                ))
+                .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"));
+                println!("{json}");
+                return;
+            }
             println!("Aborted.");
             return;
         }
 
-        let actions = renamer.execute(&plans, is_dry);
-        for action in &actions {
+        let report = renamer.execute_report(&plans, is_dry);
+        if options.json_output {
+            let json = serde_json::to_string_pretty(&ExecutionCommandReport::new(
+                COMMAND_RENAME,
+                ExecutionSummary::from_rename_plans(&plans),
+                &plans,
+                &report,
+                is_dry,
+                false,
+            ))
+            .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"));
+            println!("{json}");
+            return;
+        }
+        for action in &report.details {
             println!("{action}");
         }
-        println!(
-            "\n{} rename plans generated, {} actions taken.",
-            plans.len(),
-            actions.len()
-        );
+        println!("\n{}", report.summary_line());
         return;
     }
 
-    // Step 3: Generate organize plans
     let organizer = Organizer::new(org_config);
-    let plans = organizer.plan(&items, organize_mode, link_mode);
+    let plans = organizer.plan(&state.items, organize_mode, link_mode);
 
     if plans.is_empty() {
         println!("All files are already organized.");
         return;
     }
 
-    // Output plans
-    if options.json_output {
-        let json = serde_json::to_string_pretty(
-            &plans
-                .iter()
-                .map(|p| {
-                    serde_json::json!({
-                        "source": p.source,
-                        "target": p.target,
-                        "action": format!("{:?}", p.action),
-                        "nfo": p.nfo_content.is_some(),
-                        "images": p.image_urls.len(),
-                    })
-                })
-                .collect::<Vec<_>>(),
-        )
-        .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"));
-        println!("{json}");
-    } else {
-        print_organize_table(&plans);
+    if !options.json_output {
+        crate::cli::render::print_organize_table(&plans);
     }
 
-    // Step 4: Execute
     let is_dry = options.dry_run || config.general.dry_run;
+    let blocked = plans
+        .iter()
+        .filter(|plan| !plan.conflicts.is_empty())
+        .count();
+    let nfo_ready = plans
+        .iter()
+        .filter(|plan| plan.nfo_content.is_some())
+        .count();
+    let image_ready = plans
+        .iter()
+        .filter(|plan| !plan.image_urls.is_empty())
+        .count();
     if !is_dry
         && config.general.confirm
         && !dialoguer::Confirm::new()
             .with_prompt(format!(
-                "{} organize actions will be applied. Proceed?",
-                plans.len()
+                "{} organize plans ready, {} blocked, trusted assets: nfo={} image={}. Proceed?",
+                plans.len().saturating_sub(blocked),
+                blocked,
+                nfo_ready,
+                image_ready
             ))
             .default(false)
             .interact()
             .unwrap_or(false)
     {
+        if options.json_output {
+            let report = crate::engine::execution_report::ExecutionReport::new("organize");
+            let json = serde_json::to_string_pretty(&ExecutionCommandReport::new(
+                COMMAND_ORGANIZE,
+                ExecutionSummary::from_organize_plans(&plans),
+                &plans,
+                &report,
+                is_dry,
+                true,
+            ))
+            .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"));
+            println!("{json}");
+            return;
+        }
         println!("Aborted.");
         return;
     }
 
-    let actions = organizer.execute(&plans, is_dry);
-    for action in &actions {
+    let report = organizer.execute_report(&plans, is_dry);
+    if options.json_output {
+        let json = serde_json::to_string_pretty(&ExecutionCommandReport::new(
+            COMMAND_ORGANIZE,
+            ExecutionSummary::from_organize_plans(&plans),
+            &plans,
+            &report,
+            is_dry,
+            false,
+        ))
+        .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"));
+        println!("{json}");
+        return;
+    }
+    for action in &report.details {
         println!("{action}");
     }
 
-    println!("\n{} plans, {} actions.", plans.len(), actions.len());
-}
-
-fn print_organize_table(plans: &[crate::engine::organizer::OrganizePlan]) {
-    use console::style;
-
-    println!(
-        "{}  {}  {}  {}  {}",
-        style("Action").bold().cyan().dim(),
-        style("Source").bold().cyan().dim(),
-        style("→").bold().yellow().dim(),
-        style("Target").bold().green().dim(),
-        style("Extras").bold().cyan().dim(),
-    );
-
-    for plan in plans {
-        let action = format!("{:?}", plan.action).to_lowercase();
-        let src_name = plan
-            .source
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
-        let tgt_dir = plan
-            .target
-            .parent()
-            .map(|p| p.display().to_string())
-            .unwrap_or_default();
-        let mut extras: Vec<String> = Vec::new();
-        if plan.nfo_content.is_some() {
-            extras.push("nfo".into());
-        }
-        if !plan.image_urls.is_empty() {
-            extras.push(format!("{}img", plan.image_urls.len()));
-        }
-
-        println!(
-            "  {:<10} {} → {}/  {}",
-            action,
-            super::truncate(&src_name, 35),
-            super::truncate(&tgt_dir, 35),
-            extras.join("+"),
-        );
-    }
-}
-
-fn print_rename_table(plans: &[crate::models::media::RenamePlan]) {
-    use console::style;
-
-    println!(
-        "{}  {}  {}",
-        style("Old").bold().cyan().dim(),
-        style("→").bold().yellow().dim(),
-        style("New").bold().green().dim(),
-    );
-
-    for plan in plans {
-        let old_name = plan
-            .old_path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
-        let new_name = plan
-            .new_path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
-        println!(
-            "  {} → {}",
-            super::truncate(&old_name, 50),
-            super::truncate(&new_name, 50)
-        );
-
-        for sub in &plan.subtitle_plans {
-            let sub_old = sub
-                .old_path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
-            let sub_new = sub
-                .new_path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
-            println!(
-                "  {} → {}  (subtitle)",
-                super::truncate(&sub_old, 48),
-                super::truncate(&sub_new, 48)
-            );
-        }
-    }
+    println!("\n{}", report.summary_line());
 }

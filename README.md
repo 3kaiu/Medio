@@ -122,6 +122,17 @@ src/
 └── tui/          # Ratatui terminal UI
 ```
 
+## 🧾 CLI Schema
+
+Structured JSON output is documented in [CLI_SCHEMA.md](./CLI_SCHEMA.md).
+
+Current guarantees:
+
+- top-level `schema_version`
+- top-level `kind`
+- top-level `command`
+- stable execution receipt counters for `rename`, `dedup`, and `organize`
+
 ## 🎯 Organize Modes
 
 | Mode      | Behavior                                                                    |

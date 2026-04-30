@@ -1,103 +1,79 @@
+use crate::cli::report::{COMMAND_DEDUP, ExecutionCommandReport, ExecutionSummary};
 use crate::core::config::AppConfig;
-use crate::core::context_infer::ContextInfer;
-use crate::core::hasher::FileHasher;
-use crate::core::identifier::Identifier;
-use crate::core::keyword_filter::KeywordFilter;
-use crate::db::cache::Cache;
+use crate::core::pipeline::{Pipeline, ProbeBackend};
 use crate::engine::deduplicator::Deduplicator;
-use crate::media::ffprobe::FfprobeProbe;
-use crate::media::native_probe::NativeProbe;
-use crate::media::probe::MediaProbe;
-use crate::models::media::MediaItem;
-use indicatif::HumanBytes;
-use rayon::prelude::*;
 use std::path::Path;
 
 pub fn run(path: &str, config: &AppConfig, dry_run: bool, json_output: bool, probe_backend: &str) {
     let root = Path::new(path);
-    if !root.exists() {
-        eprintln!("Error: path does not exist: {path}");
-        return;
-    }
+    let pipeline = Pipeline::new(config);
+    let mut state = match pipeline.load_or_scan(root) {
+        Ok(state) => state,
+        Err(err) => {
+            eprintln!("{err}");
+            return;
+        }
+    };
 
-    // Step 1: Load scan index or scan live
-    let mut items = super::load_scan_items_or_scan(root, config);
-
-    if items.is_empty() {
+    if state.items.is_empty() {
         println!("No media files found.");
         return;
     }
 
-    // Step 2: Identify
-    let keyword_filter = KeywordFilter::new(config.scan.keyword_filter.clone());
-    let identifier = Identifier::new(keyword_filter);
-    identifier.parse_batch(&mut items);
+    pipeline.identify(&mut state);
+    pipeline.infer_context(&mut state);
 
-    // Step 3: Context inference
-    for item in items.iter_mut() {
-        ContextInfer::enrich_item(item);
-    }
-
-    // Step 4: Hash
     println!("Computing hashes...");
-    let cache = Cache::open(&config.cache_path()).ok();
-    if let Some(ref cache) = cache {
-        let _ = cache.cleanup(config.cache.ttl_days);
-    }
-    FileHasher::compute_all_with_cache(&mut items, cache.as_ref());
+    pipeline.hash(&mut state);
 
-    // Step 5: Probe quality
     println!("Probing media quality...");
-    let use_ffprobe = if probe_backend == "ffprobe" {
-        FfprobeProbe::is_available()
-    } else if probe_backend == "native" {
-        false
-    } else {
-        !config.general.dry_run && FfprobeProbe::is_available()
-    };
+    pipeline.probe(&mut state, ProbeBackend::from_cli(probe_backend));
 
-    if use_ffprobe {
-        let probe = FfprobeProbe::new(config.quality.clone());
-        probe_items(&mut items, &probe);
-    } else {
-        let probe = NativeProbe::new(config.quality.clone());
-        probe_items(&mut items, &probe);
-    }
-
-    // Step 6: Dedup analysis
     let deduplicator = Deduplicator::new(config.dedup.clone());
-    let groups = deduplicator.analyze(&items);
+    let groups = deduplicator.analyze(&state.items);
 
     if groups.is_empty() {
         println!("No duplicates found.");
         return;
     }
 
-    // Print results
-    if json_output {
-        let json = serde_json::to_string_pretty(&groups)
-            .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"));
-        println!("{json}");
-    } else {
-        print_dedup_table(&groups, &items);
+    if !json_output {
+        crate::cli::render::print_dedup_table(&groups, &state.items);
     }
 
-    // Step 7: Execute or preview
     let is_dry = dry_run || config.general.dry_run;
     if !is_dry && config.general.confirm {
         let pending_actions = groups
             .iter()
             .map(|group| group.items.iter().filter(|item| !item.is_keep).count())
             .sum::<usize>();
+        let guarded_groups = groups
+            .iter()
+            .filter(|group| !group.guardrails.is_empty())
+            .count();
         if !dialoguer::Confirm::new()
             .with_prompt(format!(
-                "{} duplicate files will be removed. Proceed?",
-                pending_actions
+                "{} duplicate files scheduled, {} groups guarded for review. Proceed?",
+                pending_actions, guarded_groups
             ))
             .default(false)
             .interact()
             .unwrap_or(false)
         {
+            if json_output {
+                let report = crate::engine::execution_report::ExecutionReport::new("dedup");
+                let json = serde_json::to_string_pretty(&ExecutionCommandReport::new(
+                    COMMAND_DEDUP,
+                    ExecutionSummary::from_duplicate_groups(&groups),
+                    &groups,
+                    &report,
+                    is_dry,
+                    true,
+                ))
+                .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"));
+                println!("{json}");
+                return;
+            }
             println!("Aborted.");
             return;
         }
@@ -110,75 +86,31 @@ pub fn run(path: &str, config: &AppConfig, dry_run: bool, json_output: bool, pro
             return;
         }
     };
-    let actions = rt
-        .block_on(deduplicator.execute(&groups, &items, is_dry))
-        .unwrap_or_else(|e| vec![format!("Error: {e}")]);
+    let report = rt
+        .block_on(deduplicator.execute_report(&groups, &state.items, is_dry))
+        .unwrap_or_else(|e| {
+            let mut report = crate::engine::execution_report::ExecutionReport::new("dedup");
+            report.errors = 1;
+            report.details.push(format!("Error: {e}"));
+            report
+        });
+    if json_output {
+        let json = serde_json::to_string_pretty(&ExecutionCommandReport::new(
+            COMMAND_DEDUP,
+            ExecutionSummary::from_duplicate_groups(&groups),
+            &groups,
+            &report,
+            is_dry,
+            false,
+        ))
+        .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"));
+        println!("{json}");
+        return;
+    }
 
-    for action in &actions {
+    for action in &report.details {
         println!("{action}");
     }
 
-    let removed = actions
-        .iter()
-        .filter(|a| !a.starts_with("[error]") && !a.starts_with("[skip]"))
-        .count();
-    println!(
-        "\n{} files processed, {} actions taken.",
-        groups.iter().map(|g| g.items.len()).sum::<usize>(),
-        removed
-    );
-}
-
-fn probe_items(items: &mut [MediaItem], probe: &dyn MediaProbe) {
-    items.par_iter_mut().for_each(|item| {
-        if let Ok(quality) = probe.probe(&item.path) {
-            item.quality = Some(quality);
-        }
-    });
-}
-
-fn print_dedup_table(groups: &[crate::engine::deduplicator::DuplicateGroup], items: &[MediaItem]) {
-    use console::style;
-
-    for (gi, group) in groups.iter().enumerate() {
-        println!(
-            "\n{}",
-            style(format!("Group {} — {}", gi + 1, group.content_id))
-                .bold()
-                .yellow()
-        );
-
-        println!(
-            "  {}  {}  {}  {}  {}",
-            style("Keep").bold().cyan().dim(),
-            style("Path").bold().cyan().dim(),
-            style("Size").bold().cyan().dim(),
-            style("Quality").bold().cyan().dim(),
-            style("Score").bold().cyan().dim(),
-        );
-
-        for di in &group.items {
-            let item = &items[di.index];
-            let keep = if di.is_keep { "✓ KEEP" } else { "✗ REMOVE" };
-            let score = if let Some(q) = &item.quality {
-                format!("{:.1}", q.quality_score)
-            } else {
-                "—".into()
-            };
-            let quality = item
-                .quality
-                .as_ref()
-                .map(|q| q.resolution_label.clone())
-                .unwrap_or_default();
-
-            println!(
-                "  {:<10} {:<50} {:<10} {:<10} {}",
-                keep,
-                super::truncate(&item.path.display().to_string(), 50),
-                HumanBytes(item.file_size).to_string(),
-                quality,
-                score,
-            );
-        }
-    }
+    println!("\n{}", report.summary_line());
 }

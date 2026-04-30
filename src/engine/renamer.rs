@@ -1,6 +1,8 @@
 use crate::core::config::RenameConfig;
+use crate::engine::execution_report::ExecutionReport;
 use crate::models::media::{
-    DirectoryRenamePlan, MediaItem, MediaType, RenamePlan, ScrapeSource, SubtitleRenamePlan,
+    DirectoryRenamePlan, MediaItem, MediaType, RenameDecisionProfile, RenamePlan, ScrapeSource,
+    SubtitleRenamePlan,
 };
 use once_cell::sync::Lazy;
 use std::collections::{HashMap, HashSet};
@@ -55,10 +57,22 @@ impl Renamer {
                     new_path: dir_plan.old_path.clone(),
                     subtitle_plans: Vec::new(),
                     directory_plans: vec![dir_plan.clone()],
+                    decision: RenameDecisionProfile {
+                        directory_count: 1,
+                        ..Default::default()
+                    },
+                    rationale: vec!["directory normalization plan".into()],
+                    conflicts: Vec::new(),
                 });
             }
         }
 
+        for plan in &mut plans {
+            plan.decision.subtitle_count = plan.subtitle_plans.len();
+            plan.decision.directory_count = plan.directory_plans.len();
+        }
+
+        self.apply_preflight_conflicts(&mut plans);
         plans
     }
 
@@ -96,13 +110,78 @@ impl Renamer {
         } else {
             Vec::new()
         };
+        let subtitle_count = subtitle_plans.len();
 
         Some(RenamePlan {
             old_path,
             new_path,
             subtitle_plans,
             directory_plans: Vec::new(),
+            decision: rename_decision(
+                item,
+                &template,
+                self.config.preserve_media_suffix,
+                template_mentions_ext(&template),
+                subtitle_count,
+                0,
+            ),
+            rationale: rename_rationale(item, &template),
+            conflicts: Vec::new(),
         })
+    }
+
+    fn apply_preflight_conflicts(&self, plans: &mut [RenamePlan]) {
+        let mut target_counts: HashMap<std::path::PathBuf, usize> = HashMap::new();
+        for plan in plans.iter() {
+            if plan.old_path != plan.new_path {
+                *target_counts.entry(plan.new_path.clone()).or_default() += 1;
+            }
+            for sub in &plan.subtitle_plans {
+                *target_counts.entry(sub.new_path.clone()).or_default() += 1;
+            }
+        }
+
+        let planned_sources: HashSet<_> = plans.iter().map(|plan| plan.old_path.clone()).collect();
+        for plan in plans.iter_mut() {
+            if plan.old_path != plan.new_path {
+                if target_counts.get(&plan.new_path).copied().unwrap_or(0) > 1 {
+                    plan.conflicts.push(format!(
+                        "target path collides with another rename plan: {}",
+                        plan.new_path.display()
+                    ));
+                }
+                if plan.new_path.exists() && !planned_sources.contains(&plan.new_path) {
+                    plan.conflicts.push(format!(
+                        "target path already exists on disk: {}",
+                        plan.new_path.display()
+                    ));
+                }
+            }
+
+            for sub in &plan.subtitle_plans {
+                if target_counts.get(&sub.new_path).copied().unwrap_or(0) > 1 {
+                    plan.conflicts.push(format!(
+                        "subtitle target collides with another rename plan: {}",
+                        sub.new_path.display()
+                    ));
+                }
+                if sub.new_path.exists() && !planned_sources.contains(&sub.new_path) {
+                    plan.conflicts.push(format!(
+                        "subtitle target already exists on disk: {}",
+                        sub.new_path.display()
+                    ));
+                }
+            }
+
+            for dir in &plan.directory_plans {
+                if dir.new_path.exists() && dir.new_path != dir.old_path {
+                    plan.conflicts.push(format!(
+                        "directory target already exists on disk: {}",
+                        dir.new_path.display()
+                    ));
+                }
+            }
+        }
     }
 
     fn build_directory_plans(&self, items: &[MediaItem]) -> Vec<DirectoryRenamePlan> {
@@ -204,45 +283,26 @@ impl Renamer {
             );
         }
 
-        // Scraped info overrides parsed values when available.
+        if let Some(title) = item.preferred_title() {
+            ctx.insert("title".into(), title.value);
+        }
+        if let Some(year) = item.preferred_year() {
+            ctx.insert("year".into(), year.value.to_string());
+        }
+        if let Some(season) = item.preferred_season() {
+            let adjusted = (season.value as i32 + season_offset).max(0) as u32;
+            let formatted = format!("{adjusted:02}");
+            ctx.insert("season".into(), formatted.clone());
+            ctx.insert("s".into(), formatted);
+        }
+        if let Some(episode) = item.preferred_episode() {
+            let formatted = format!("{:02}", episode.value);
+            ctx.insert("episode".into(), formatted.clone());
+            ctx.insert("e".into(), formatted);
+        }
+
+        // Scraped info still populates provider-specific fields when available.
         if let Some(s) = &item.scraped {
-            ctx.insert("title".into(), s.title.clone());
-            ctx.insert(
-                "year".into(),
-                s.year
-                    .map(|y| y.to_string())
-                    .unwrap_or_else(|| ctx.get("year").cloned().unwrap_or_default()),
-            );
-            ctx.insert(
-                "season".into(),
-                s.season_number
-                    .map(|season| {
-                        let adjusted = (season as i32 + season_offset).max(0) as u32;
-                        format!("{adjusted:02}")
-                    })
-                    .unwrap_or_else(|| ctx.get("season").cloned().unwrap_or_default()),
-            );
-            ctx.insert(
-                "s".into(),
-                s.season_number
-                    .map(|season| {
-                        let adjusted = (season as i32 + season_offset).max(0) as u32;
-                        format!("{adjusted:02}")
-                    })
-                    .unwrap_or_else(|| ctx.get("s").cloned().unwrap_or_default()),
-            );
-            ctx.insert(
-                "episode".into(),
-                s.episode_number
-                    .map(|episode| format!("{episode:02}"))
-                    .unwrap_or_else(|| ctx.get("episode").cloned().unwrap_or_default()),
-            );
-            ctx.insert(
-                "e".into(),
-                s.episode_number
-                    .map(|episode| format!("{episode:02}"))
-                    .unwrap_or_else(|| ctx.get("e").cloned().unwrap_or_default()),
-            );
             ctx.insert("scraped_title".into(), s.title.clone());
             ctx.insert(
                 "episode_name".into(),
@@ -398,27 +458,45 @@ impl Renamer {
     }
 
     /// Execute rename plans (dry-run supported)
+    #[allow(dead_code)]
     pub fn execute(&self, plans: &[RenamePlan], dry_run: bool) -> Vec<String> {
-        let mut actions = Vec::new();
+        self.execute_report(plans, dry_run).details
+    }
+
+    pub fn execute_report(&self, plans: &[RenamePlan], dry_run: bool) -> ExecutionReport {
+        let mut report = ExecutionReport::new("rename");
 
         for plan in plans {
+            if !plan.conflicts.is_empty() {
+                report.blocked += 1;
+                report
+                    .details
+                    .push(format!("[conflict] {}", plan.old_path.display()));
+                for conflict in &plan.conflicts {
+                    report.details.push(format!("  - {conflict}"));
+                }
+                continue;
+            }
             if dry_run {
                 if plan.old_path != plan.new_path {
-                    actions.push(format!(
+                    report.executed += 1;
+                    report.details.push(format!(
                         "[dry-run] {} → {}",
                         plan.old_path.display(),
                         plan.new_path.display()
                     ));
                 }
                 for sub in &plan.subtitle_plans {
-                    actions.push(format!(
+                    report.executed += 1;
+                    report.details.push(format!(
                         "[dry-run] {} → {}",
                         sub.old_path.display(),
                         sub.new_path.display()
                     ));
                 }
                 for dir in &plan.directory_plans {
-                    actions.push(format!(
+                    report.executed += 1;
+                    report.details.push(format!(
                         "[dry-run] {} → {}",
                         dir.old_path.display(),
                         dir.new_path.display()
@@ -434,13 +512,17 @@ impl Renamer {
                                 plan.new_path.display()
                             );
                             crate::core::oplog::log(&msg);
-                            actions.push(msg);
+                            report.executed += 1;
+                            report.details.push(msg);
                         }
-                        Err(e) => actions.push(format!(
-                            "[error] {} → {}: {e}",
-                            plan.old_path.display(),
-                            plan.new_path.display()
-                        )),
+                        Err(e) => {
+                            report.errors += 1;
+                            report.details.push(format!(
+                                "[error] {} → {}: {e}",
+                                plan.old_path.display(),
+                                plan.new_path.display()
+                            ));
+                        }
                     }
                 }
                 for sub in &plan.subtitle_plans {
@@ -452,17 +534,22 @@ impl Renamer {
                                 sub.new_path.display()
                             );
                             crate::core::oplog::log(&msg);
-                            actions.push(msg);
+                            report.executed += 1;
+                            report.details.push(msg);
                         }
-                        Err(e) => actions.push(format!(
-                            "[error] {} → {}: {e}",
-                            sub.old_path.display(),
-                            sub.new_path.display()
-                        )),
+                        Err(e) => {
+                            report.errors += 1;
+                            report.details.push(format!(
+                                "[error] {} → {}: {e}",
+                                sub.old_path.display(),
+                                sub.new_path.display()
+                            ));
+                        }
                     }
                 }
                 for dir in &plan.directory_plans {
                     if !dir.old_path.exists() || dir.new_path.exists() {
+                        report.skipped += 1;
                         continue;
                     }
                     match std::fs::rename(&dir.old_path, &dir.new_path) {
@@ -473,19 +560,23 @@ impl Renamer {
                                 dir.new_path.display()
                             );
                             crate::core::oplog::log(&msg);
-                            actions.push(msg);
+                            report.executed += 1;
+                            report.details.push(msg);
                         }
-                        Err(e) => actions.push(format!(
-                            "[error] {} → {}: {e}",
-                            dir.old_path.display(),
-                            dir.new_path.display()
-                        )),
+                        Err(e) => {
+                            report.errors += 1;
+                            report.details.push(format!(
+                                "[error] {} → {}: {e}",
+                                dir.old_path.display(),
+                                dir.new_path.display()
+                            ));
+                        }
                     }
                 }
             }
         }
 
-        actions
+        report
     }
 }
 
@@ -510,29 +601,117 @@ fn parent_chain(path: &Path) -> Vec<&Path> {
 }
 
 fn title_for(item: &MediaItem) -> Option<String> {
-    item.scraped
-        .as_ref()
-        .map(|s| s.title.clone())
-        .or_else(|| item.parsed.as_ref().map(|p| p.raw_title.clone()))
-        .map(|title| sanitize_name(&title))
+    item.preferred_title()
+        .map(|decision| sanitize_name(&decision.value))
         .filter(|title| !title.is_empty())
 }
 
+fn rename_rationale(item: &MediaItem, template: &str) -> Vec<String> {
+    let mut rationale = Vec::new();
+    rationale.push(format!("template: {template}"));
+    if let Some(title) = item.preferred_title() {
+        rationale.push(format!(
+            "title authority: {} ({:?}, {:.2})",
+            title.value, title.origin, title.confidence
+        ));
+        rationale.push(format!("title reason: {}", title.reason));
+    }
+    if let Some(year) = item.preferred_year() {
+        rationale.push(format!(
+            "year authority: {} ({:?}, {:.2})",
+            year.value, year.origin, year.confidence
+        ));
+    }
+    if let Some(season) = item.preferred_season() {
+        rationale.push(format!(
+            "season authority: {} ({:?}, {:.2})",
+            season.value, season.origin, season.confidence
+        ));
+    }
+    if let Some(episode) = item.preferred_episode() {
+        rationale.push(format!(
+            "episode authority: {} ({:?}, {:.2})",
+            episode.value, episode.origin, episode.confidence
+        ));
+    }
+    if let Some(parsed) = &item.parsed {
+        rationale.push(format!("parsed title: {}", parsed.raw_title));
+        if let Some(year) = parsed.year {
+            rationale.push(format!("parsed year: {year}"));
+        }
+        if let Some(season) = parsed.season {
+            rationale.push(format!("parsed season: {season}"));
+        }
+        if let Some(episode) = parsed.episode {
+            rationale.push(format!("parsed episode: {episode}"));
+        }
+    }
+    if let Some(scraped) = &item.scraped {
+        rationale.push(format!("scraped title: {}", scraped.title));
+        rationale.push(format!("scrape source: {:?}", scraped.source));
+        rationale.push(format!(
+            "scrape authority: {:.2}",
+            item.scraped_metadata_confidence()
+        ));
+    }
+    if let Some(identity) = &item.identity_resolution {
+        rationale.push(format!(
+            "identity confirmation: {:?}",
+            identity.confirmation_state
+        ));
+        if let Some(best) = &identity.best {
+            rationale.push(format!(
+                "identity candidate: {} ({:.2})",
+                best.title, best.score
+            ));
+        }
+    }
+    rationale
+}
+
+fn rename_decision(
+    item: &MediaItem,
+    template: &str,
+    preserve_media_suffix: bool,
+    template_uses_ext: bool,
+    subtitle_count: usize,
+    directory_count: usize,
+) -> RenameDecisionProfile {
+    let title = item.preferred_title();
+    let year = item.preferred_year();
+    let season = item.preferred_season();
+    let episode = item.preferred_episode();
+
+    RenameDecisionProfile {
+        template: template.to_string(),
+        template_uses_ext,
+        preserve_media_suffix,
+        title_origin: title.as_ref().map(|decision| decision.origin),
+        title_confidence: title.as_ref().map(|decision| decision.confidence),
+        year_origin: year.as_ref().map(|decision| decision.origin),
+        year_confidence: year.as_ref().map(|decision| decision.confidence),
+        season_origin: season.as_ref().map(|decision| decision.origin),
+        season_confidence: season.as_ref().map(|decision| decision.confidence),
+        episode_origin: episode.as_ref().map(|decision| decision.origin),
+        episode_confidence: episode.as_ref().map(|decision| decision.confidence),
+        subtitle_count,
+        directory_count,
+    }
+}
+
 fn tv_season_directory_plan(item: &MediaItem) -> Option<DirectoryRenamePlan> {
-    let parsed = item.parsed.as_ref()?;
-    let season = parsed.season?;
+    let season = item.preferred_season()?.value;
     let old_path = item.path.parent()?.to_path_buf();
     let desired_name = format!("Season {season:02}");
     rename_dir_plan_if_needed(&old_path, &desired_name)
 }
 
 fn tv_show_directory_plan(item: &MediaItem) -> Option<DirectoryRenamePlan> {
-    let parsed = item.parsed.as_ref()?;
     let old_season_dir = item.path.parent()?;
     let old_show_dir = old_season_dir.parent()?;
     let mut desired_name = title_for(item)?;
     if desired_name.is_empty() {
-        desired_name = parsed.raw_title.clone();
+        desired_name = item.parsed.as_ref()?.raw_title.clone();
     }
     rename_dir_plan_if_needed(old_show_dir, &desired_name)
 }
@@ -543,11 +722,7 @@ fn movie_directory_plan(item: &MediaItem) -> Option<DirectoryRenamePlan> {
         return None;
     }
     let title = title_for(item)?;
-    let year = item
-        .scraped
-        .as_ref()
-        .and_then(|s| s.year)
-        .or_else(|| item.parsed.as_ref().and_then(|p| p.year));
+    let year = item.preferred_year().map(|decision| decision.value);
     let desired_name = match year {
         Some(year) => format!("{title} ({year})"),
         None => title,
@@ -698,8 +873,10 @@ mod tests {
     use super::*;
     use crate::core::config::RenameConfig;
     use crate::models::media::{
-        MediaItem, MediaType, ParseSource, ParsedInfo, ScrapeResult, ScrapeSource,
+        ConfirmationState, IdentityResolution, MediaItem, MediaType, ParseSource, ParsedInfo,
+        ScrapeResult, ScrapeSource,
     };
+    use std::path::PathBuf;
 
     fn make_config() -> RenameConfig {
         RenameConfig::default()
@@ -723,10 +900,14 @@ mod tests {
                 release_group: None,
                 media_suffix: Some("1080P.H.264".into()),
                 parse_source: ParseSource::Regex,
+                confidence: 0.9,
+                evidence: vec!["test fixture parsed movie".into()],
             }),
             hash: None,
             quality: None,
             scraped: None,
+            content_evidence: None,
+            identity_resolution: None,
             rename_plan: None,
         }
     }
@@ -749,10 +930,14 @@ mod tests {
                 release_group: None,
                 media_suffix: None,
                 parse_source: ParseSource::Regex,
+                confidence: 0.92,
+                evidence: vec!["test fixture parsed episode".into()],
             }),
             hash: None,
             quality: None,
             scraped: None,
+            content_evidence: None,
+            identity_resolution: None,
             rename_plan: None,
         }
     }
@@ -762,26 +947,13 @@ mod tests {
         scraped_title: &str,
         year: Option<u16>,
     ) -> MediaItem {
-        item.scraped = Some(ScrapeResult {
-            source: ScrapeSource::Tmdb,
-            title: scraped_title.into(),
-            title_original: None,
-            year,
-            overview: None,
-            rating: None,
-            season_number: None,
-            episode_number: None,
-            episode_name: None,
-            poster_url: None,
-            fanart_url: None,
-            artist: None,
-            album: None,
-            track_number: None,
-            author: None,
-            cover_url: None,
-            tmdb_id: Some(1),
-            musicbrainz_id: None,
-            openlibrary_id: None,
+        item.scraped = Some({
+            let mut result = ScrapeResult::empty(ScrapeSource::Tmdb, scraped_title)
+                .with_confidence(0.9)
+                .with_evidence(["test fixture scraped movie"]);
+            result.year = year;
+            result.tmdb_id = Some(1);
+            result
         });
         item
     }
@@ -792,26 +964,35 @@ mod tests {
         season: u32,
         episode: u32,
     ) -> MediaItem {
-        item.scraped = Some(ScrapeResult {
-            source: ScrapeSource::Tmdb,
-            title: title.into(),
-            title_original: None,
-            year: None,
-            overview: None,
-            rating: None,
-            season_number: Some(season),
-            episode_number: Some(episode),
-            episode_name: Some("Pilot".into()),
-            poster_url: None,
-            fanart_url: None,
-            artist: None,
-            album: None,
-            track_number: None,
-            author: None,
-            cover_url: None,
-            tmdb_id: Some(1),
-            musicbrainz_id: None,
-            openlibrary_id: None,
+        item.scraped = Some({
+            let mut result = ScrapeResult::empty(ScrapeSource::Tmdb, title)
+                .with_confidence(0.92)
+                .with_evidence(["test fixture scraped episode"]);
+            result.season_number = Some(season);
+            result.episode_number = Some(episode);
+            result.episode_name = Some("Pilot".into());
+            result.tmdb_id = Some(1);
+            result
+        });
+        item
+    }
+
+    fn with_low_confidence_guess_title(mut item: MediaItem, title: &str) -> MediaItem {
+        item.scraped = Some(
+            ScrapeResult::empty(ScrapeSource::Guess, title)
+                .with_confidence(0.45)
+                .with_evidence(["test fixture low confidence guess"]),
+        );
+        item
+    }
+
+    fn with_identity_state(mut item: MediaItem, state: ConfirmationState) -> MediaItem {
+        item.identity_resolution = Some(IdentityResolution {
+            confirmation_state: state,
+            best: None,
+            candidates: Vec::new(),
+            evidence_refs: Vec::new(),
+            risk_flags: Vec::new(),
         });
         item
     }
@@ -952,6 +1133,61 @@ mod tests {
             .to_string();
         assert!(new_name.contains("Inception"));
         assert!(!new_name.contains("tt1234567"));
+        assert_eq!(
+            plans[0].decision.title_origin,
+            Some(crate::models::media::MetadataOrigin::Scraped)
+        );
+    }
+
+    #[test]
+    fn test_confirmed_identity_scraped_title_overrides_high_confidence_parsed_noise() {
+        let renamer = Renamer::new(make_config());
+        let mut item = make_movie_item("Blurred.Encode.2024", Some(2024));
+        if let Some(parsed) = &mut item.parsed {
+            parsed.confidence = 0.96;
+        }
+        let item = with_identity_state(
+            with_scraped_title(item, "The Substance", Some(2024)),
+            ConfirmationState::Confirmed,
+        );
+
+        let plans = renamer.plan(&[item]);
+        assert!(!plans.is_empty());
+        let new_name = plans[0]
+            .new_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        assert!(new_name.contains("The Substance"));
+        assert!(!new_name.contains("Blurred Encode"));
+        assert_eq!(
+            plans[0].decision.title_origin,
+            Some(crate::models::media::MetadataOrigin::Scraped)
+        );
+        assert!(
+            plans[0]
+                .rationale
+                .iter()
+                .any(|line| line.contains("identity confirmation: Confirmed"))
+        );
+    }
+
+    #[test]
+    fn test_low_confidence_guess_does_not_override_parsed_title() {
+        let renamer = Renamer::new(make_config());
+        let item =
+            with_low_confidence_guess_title(make_movie_item("Inception", Some(2010)), "Noise");
+        let plans = renamer.plan(&[item]);
+        assert!(!plans.is_empty());
+        let new_name = plans[0]
+            .new_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        assert!(new_name.contains("Inception"));
+        assert!(!new_name.contains("Noise"));
     }
 
     #[test]
@@ -1005,6 +1241,7 @@ mod tests {
         let plans = renamer.plan(&[item]);
         assert!(!plans.is_empty());
         assert!(plans[0].subtitle_plans.is_empty());
+        assert_eq!(plans[0].decision.subtitle_count, 0);
     }
 
     #[test]
@@ -1034,6 +1271,7 @@ mod tests {
         assert_eq!(plans.len(), 1);
         let dir_plans = &plans[0].directory_plans;
         assert_eq!(dir_plans.len(), 2);
+        assert_eq!(plans[0].decision.directory_count, 2);
         assert_eq!(
             dir_plans[0].new_path,
             std::path::PathBuf::from("/tmp/9号秘事 1-9季(1)/Season 01")
@@ -1076,6 +1314,28 @@ mod tests {
         assert_eq!(
             plans[0].directory_plans[0].new_path,
             std::path::PathBuf::from("/tmp/9号秘事/Season 01")
+        );
+    }
+
+    #[test]
+    fn test_preflight_detects_target_collisions() {
+        let mut a = make_movie_item("Alpha", Some(2024));
+        let mut b = make_movie_item("Beta", Some(2024));
+        a.path = PathBuf::from("/tmp/A.mp4");
+        b.path = PathBuf::from("/tmp/B.mp4");
+
+        let renamer = Renamer::new(RenameConfig {
+            movie_template: "SameName".into(),
+            ..make_config()
+        });
+        let plans = renamer.plan(&[a, b]);
+
+        assert_eq!(plans.len(), 2);
+        assert!(plans.iter().all(|plan| !plan.conflicts.is_empty()));
+        assert!(
+            plans
+                .iter()
+                .all(|plan| plan.conflicts.iter().any(|msg| msg.contains("collides")))
         );
     }
 

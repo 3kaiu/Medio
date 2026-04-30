@@ -1,80 +1,31 @@
+use crate::cli::report::{AnalysisDiagnostic, AnalysisSummary, AnalyzeCommandReport};
 use crate::core::config::AppConfig;
-use crate::core::context_infer::ContextInfer;
-use crate::core::hasher::FileHasher;
-use crate::core::identifier::Identifier;
-use crate::core::keyword_filter::KeywordFilter;
-use crate::core::scanner::Scanner;
-use crate::db::cache::Cache;
-use crate::media::ffprobe::FfprobeProbe;
-use crate::media::native_probe::NativeProbe;
-use crate::media::probe::MediaProbe;
-use crate::scraper;
+use crate::core::pipeline::{Pipeline, PipelineState, ProbeBackend};
+use crate::engine::deduplicator::Deduplicator;
+use crate::engine::organizer::Organizer;
+use crate::engine::renamer::Renamer;
 use std::path::Path;
 
 pub fn run(path: &str, config: &AppConfig, json_output: bool, probe_backend: &str) {
     let target = Path::new(path);
-    if !target.exists() {
-        eprintln!("Error: path does not exist: {path}");
-        return;
-    }
-
-    // Single file or directory
-    let mut items = if target.is_file() {
-        let scanner = Scanner::new(config.scan.clone());
-        scanner
-            .scan(target.parent().unwrap_or(Path::new(".")))
-            .into_iter()
-            .filter(|i| i.path == target)
-            .collect()
-    } else {
-        let scanner = Scanner::new(config.scan.clone());
-        scanner.scan(target)
+    let pipeline = Pipeline::new(config);
+    let mut state = match pipeline.load_or_scan(target) {
+        Ok(state) => state,
+        Err(err) => {
+            eprintln!("{err}");
+            return;
+        }
     };
 
-    if items.is_empty() {
+    if state.items.is_empty() {
         println!("No media files found.");
         return;
     }
 
-    // Step 1: Identify
-    let keyword_filter = KeywordFilter::new(config.scan.keyword_filter.clone());
-    let identifier = Identifier::new(keyword_filter);
-    identifier.parse_batch(&mut items);
-
-    // Step 2: Context inference
-    ContextInfer::enrich_item(&mut items[0]);
-
-    // Step 3: Hash
-    let cache = Cache::open(&config.cache_path()).ok();
-    if let Some(ref cache) = cache {
-        let _ = cache.cleanup(config.cache.ttl_days);
-    }
-    FileHasher::compute_all_with_cache(&mut items, cache.as_ref());
-
-    // Step 4: Probe quality
-    {
-        let item = &mut items[0];
-        let use_ffprobe = if probe_backend == "ffprobe" {
-            FfprobeProbe::is_available()
-        } else if probe_backend == "native" {
-            false
-        } else {
-            !config.general.dry_run && FfprobeProbe::is_available()
-        };
-        if use_ffprobe {
-            let probe = FfprobeProbe::new(config.quality.clone());
-            if let Ok(quality) = probe.probe(&item.path) {
-                item.quality = Some(quality);
-            }
-        } else {
-            let probe = NativeProbe::new(config.quality.clone());
-            if let Ok(quality) = probe.probe(&item.path) {
-                item.quality = Some(quality);
-            }
-        }
-    }
-
-    // Step 5: Scrape using the shared fallback chain + cache + AI path
+    pipeline.identify(&mut state);
+    pipeline.infer_context(&mut state);
+    pipeline.hash(&mut state);
+    pipeline.probe(&mut state, ProbeBackend::from_cli(probe_backend));
     let rt = match crate::core::runtime::build() {
         Ok(rt) => rt,
         Err(err) => {
@@ -83,24 +34,109 @@ pub fn run(path: &str, config: &AppConfig, json_output: bool, probe_backend: &st
         }
     };
     rt.block_on(async {
-        scraper::populate_scrape_results(&mut items, config).await;
+        pipeline.scrape(&mut state).await;
     });
 
-    // Output
-    let item = &items[0];
+    let target_path = state.items[0].path.clone();
+    let deduplicator = Deduplicator::new(config.dedup.clone());
+    let duplicate_groups = deduplicator
+        .analyze(&state.items)
+        .into_iter()
+        .filter(|group| {
+            group
+                .items
+                .iter()
+                .any(|entry| state.items[entry.index].path == target_path)
+        })
+        .collect::<Vec<_>>();
+
+    let renamer = Renamer::new(config.rename.clone());
+    let rename_plan = renamer
+        .plan(&state.items)
+        .into_iter()
+        .find(|plan| plan.old_path == target_path);
+
+    let organizer = Organizer::new(config.organize.clone());
+    let organize_plans = organizer
+        .plan(
+            &state.items,
+            config.organize.mode,
+            config.organize.link_mode,
+        )
+        .into_iter()
+        .filter(|plan| plan.source == target_path)
+        .collect::<Vec<_>>();
+
+    let item = &state.items[0];
+    let diagnostics = vec![
+        AnalysisDiagnostic::identify(item),
+        AnalysisDiagnostic::scrape(item),
+        AnalysisDiagnostic::dedup(&duplicate_groups, item),
+        AnalysisDiagnostic::rename(rename_plan.as_ref()),
+        AnalysisDiagnostic::organize(&organize_plans),
+    ];
     if json_output {
-        let json = serde_json::to_string_pretty(&item)
-            .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"));
+        let json = serde_json::to_string_pretty(&AnalyzeCommandReport::new(
+            &state.stages,
+            item,
+            &duplicate_groups,
+            rename_plan.as_ref(),
+            &organize_plans,
+            AnalysisSummary::new(
+                &state.stages,
+                &duplicate_groups,
+                rename_plan.as_ref(),
+                &organize_plans,
+            ),
+            diagnostics,
+        ))
+        .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"));
         println!("{json}");
     } else {
-        print_analysis(item);
+        print_analysis(
+            item,
+            &state,
+            &duplicate_groups,
+            rename_plan.as_ref(),
+            &organize_plans,
+        );
     }
 }
 
-fn print_analysis(item: &crate::models::media::MediaItem) {
+fn print_analysis(
+    item: &crate::models::media::MediaItem,
+    state: &PipelineState,
+    duplicate_groups: &[crate::engine::deduplicator::DuplicateGroup],
+    rename_plan: Option<&crate::models::media::RenamePlan>,
+    organize_plans: &[crate::engine::organizer::OrganizePlan],
+) {
     use console::style;
 
     println!("{}", style("═══ Media Analysis ═══").bold().cyan());
+    println!();
+
+    println!("{}", style("Pipeline").bold().yellow());
+    println!("  Source:       {}", state.item_source);
+    for stage in &state.stages {
+        println!("  Stage:        {}", stage.stage);
+        for detail in &stage.details {
+            println!("    - {detail}");
+        }
+    }
+    let diagnostics = vec![
+        AnalysisDiagnostic::identify(item),
+        AnalysisDiagnostic::scrape(item),
+        AnalysisDiagnostic::dedup(duplicate_groups, item),
+        AnalysisDiagnostic::rename(rename_plan),
+        AnalysisDiagnostic::organize(organize_plans),
+    ];
+    println!("  Diagnostics:");
+    for diag in diagnostics {
+        println!("    * {}: {}", diag.stage, diag.decision);
+        for risk in diag.risks.iter().take(2) {
+            println!("      risk: {risk}");
+        }
+    }
     println!();
 
     // File info
@@ -131,6 +167,11 @@ fn print_analysis(item: &crate::models::media::MediaItem) {
         }
         if let Some(g) = &parsed.release_group {
             println!("  Release:      {g}");
+        }
+        println!("  Parser:       {:?}", parsed.parse_source);
+        println!("  Confidence:   {:.2}", parsed.confidence);
+        for detail in &parsed.evidence {
+            println!("  Evidence:     {detail}");
         }
         println!();
     }
@@ -175,6 +216,7 @@ fn print_analysis(item: &crate::models::media::MediaItem) {
         println!("{}", style("Scraped").bold().green());
         println!("  Source:       {:?}", s.source);
         println!("  Title:        {}", s.title);
+        println!("  Confidence:   {:.2}", s.confidence);
         if let Some(y) = s.year {
             println!("  Year:         {y}");
         }
@@ -193,9 +235,143 @@ fn print_analysis(item: &crate::models::media::MediaItem) {
         if let Some(au) = &s.author {
             println!("  Author:       {au}");
         }
+        for detail in &s.evidence {
+            println!("  Evidence:     {detail}");
+        }
         println!();
     } else {
         println!("{}", style("Scraped: — (no metadata found)").dim());
+        println!();
+    }
+
+    if let Some(content) = &item.content_evidence {
+        println!("{}", style("Content Probe").bold().yellow());
+        if let Some(title) = &content.container.title {
+            println!("  Container:    {title}");
+        }
+        if !content.container.chapters.is_empty() {
+            println!("  Chapters:     {}", content.container.chapters.join(" | "));
+        }
+        if !content.title_candidates.is_empty() {
+            println!("  Titles:       {}", content.title_candidates.join(" | "));
+        }
+        println!("  Subtitles:    {}", content.subtitles.len());
+        if !content.season_hypotheses.is_empty() || !content.episode_hypotheses.is_empty() {
+            println!(
+                "  Hints:        season={:?} episode={:?}",
+                content.season_hypotheses, content.episode_hypotheses
+            );
+        }
+        for risk in &content.risk_flags {
+            println!("  Risk:         {risk}");
+        }
+        println!();
+    }
+
+    if let Some(identity) = &item.identity_resolution {
+        println!("{}", style("Identity").bold().yellow());
+        println!("  State:        {:?}", identity.confirmation_state);
+        if let Some(best) = &identity.best {
+            println!("  Best:         {} ({:.2})", best.title, best.score);
+            if let Some(year) = best.year {
+                println!("  Year:         {year}");
+            }
+            if let Some(season) = best.season {
+                println!("  Season:       {season}");
+            }
+            if let Some(episode) = best.episode {
+                println!("  Episode:      {episode}");
+            }
+            if let Some(name) = &best.episode_title {
+                println!("  Episode Name: {name}");
+            }
+        }
+        for risk in &identity.risk_flags {
+            println!("  Risk:         {risk}");
+        }
+        println!();
+    }
+
+    if !duplicate_groups.is_empty() {
+        println!("{}", style("Dedup").bold().yellow());
+        for group in duplicate_groups {
+            println!("  Group:        {} ({:?})", group.content_id, group.kind);
+            println!("  Strategy:     {}", group.keep_strategy);
+            println!("  Summary:      {}", group.summary);
+            for guard in &group.guardrails {
+                println!("  Guard:        {guard}");
+            }
+            for entry in &group.items {
+                let group_item = &state.items[entry.index];
+                println!(
+                    "    {} {}",
+                    if entry.is_keep { "KEEP" } else { "DROP" },
+                    group_item.path.display()
+                );
+                println!("      Why:      {}", entry.rationale);
+                if !entry.basis.is_empty() {
+                    println!("      Basis:    {}", entry.basis.join(", "));
+                }
+            }
+        }
+        println!();
+    }
+
+    if let Some(plan) = rename_plan {
+        println!("{}", style("Rename").bold().yellow());
+        println!("  Target:       {}", plan.new_path.display());
+        for reason in &plan.rationale {
+            println!("  Why:          {reason}");
+        }
+        if plan.conflicts.is_empty() {
+            println!("  Conflicts:    none");
+        } else {
+            for conflict in &plan.conflicts {
+                println!("  Conflict:     {conflict}");
+            }
+        }
+        for sub in &plan.subtitle_plans {
+            println!(
+                "  Subtitle:     {} → {}",
+                sub.old_path.display(),
+                sub.new_path.display()
+            );
+        }
+        for dir in &plan.directory_plans {
+            println!(
+                "  Dir Rename:   {} → {}",
+                dir.old_path.display(),
+                dir.new_path.display()
+            );
+        }
+        println!();
+    }
+
+    if !organize_plans.is_empty() {
+        println!("{}", style("Organize").bold().yellow());
+        for plan in organize_plans {
+            println!("  Action:       {:?}", plan.action);
+            println!("  Target:       {}", plan.target.display());
+            for reason in &plan.rationale {
+                println!("  Why:          {reason}");
+            }
+            println!(
+                "  Assets:       nfo={} images={}",
+                if plan.nfo_content.is_some() {
+                    "yes"
+                } else {
+                    "no"
+                },
+                plan.image_urls.len()
+            );
+            if plan.conflicts.is_empty() {
+                println!("  Conflicts:    none");
+            } else {
+                for conflict in &plan.conflicts {
+                    println!("  Conflict:     {conflict}");
+                }
+            }
+        }
         println!();
     }
 }

@@ -55,35 +55,34 @@ impl TmdbScraper {
             .results
             .iter()
             .take(max)
-            .map(|r| ScrapeResult {
-                source: ScrapeSource::Tmdb,
-                title: r.title.clone(),
-                title_original: r.original_title.clone(),
-                year: r
+            .map(|r| {
+                let year = r
                     .release_date
                     .as_ref()
-                    .and_then(|d| d.get(..4).and_then(|y| y.parse().ok())),
-                overview: r.overview.clone(),
-                rating: r.vote_average,
-                season_number: None,
-                episode_number: None,
-                episode_name: None,
-                poster_url: r
+                    .and_then(|d| d.get(..4).and_then(|y| y.parse().ok()));
+                let mut result = ScrapeResult::empty(ScrapeSource::Tmdb, r.title.clone())
+                    .with_confidence(0.9)
+                    .with_evidence([
+                        format!("TMDB movie candidate id={}", r.id),
+                        format!("query title '{}'", title),
+                    ]);
+                result.title_original = r.original_title.clone();
+                result.year = year;
+                result.overview = r.overview.clone();
+                result.rating = r.vote_average;
+                result.poster_url = r
                     .poster_path
                     .as_ref()
-                    .map(|p| format!("https://image.tmdb.org/t/p/original{p}")),
-                fanart_url: r
+                    .map(|p| format!("https://image.tmdb.org/t/p/original{p}"));
+                result.fanart_url = r
                     .backdrop_path
                     .as_ref()
-                    .map(|p| format!("https://image.tmdb.org/t/p/original{p}")),
-                artist: None,
-                album: None,
-                track_number: None,
-                author: None,
-                cover_url: None,
-                tmdb_id: Some(r.id as u64),
-                musicbrainz_id: None,
-                openlibrary_id: None,
+                    .map(|p| format!("https://image.tmdb.org/t/p/original{p}"));
+                result.tmdb_id = Some(r.id as u64);
+                if let Some(year) = year {
+                    result.push_evidence(format!("TMDB release year {year}"));
+                }
+                result
             })
             .collect())
     }
@@ -119,35 +118,35 @@ impl TmdbScraper {
             .results
             .iter()
             .take(max)
-            .map(|r| ScrapeResult {
-                source: ScrapeSource::Tmdb,
-                title: r.name.clone().unwrap_or_default(),
-                title_original: r.original_name.clone(),
-                year: r
+            .map(|r| {
+                let year = r
                     .first_air_date
                     .as_ref()
-                    .and_then(|d| d.get(..4).and_then(|y| y.parse().ok())),
-                overview: r.overview.clone(),
-                rating: r.vote_average,
-                season_number: None,
-                episode_number: None,
-                episode_name: None,
-                poster_url: r
+                    .and_then(|d| d.get(..4).and_then(|y| y.parse().ok()));
+                let mut result =
+                    ScrapeResult::empty(ScrapeSource::Tmdb, r.name.clone().unwrap_or_default())
+                        .with_confidence(0.9)
+                        .with_evidence([
+                            format!("TMDB TV candidate id={}", r.id),
+                            format!("query title '{}'", title),
+                        ]);
+                result.title_original = r.original_name.clone();
+                result.year = year;
+                result.overview = r.overview.clone();
+                result.rating = r.vote_average;
+                result.poster_url = r
                     .poster_path
                     .as_ref()
-                    .map(|p| format!("https://image.tmdb.org/t/p/original{p}")),
-                fanart_url: r
+                    .map(|p| format!("https://image.tmdb.org/t/p/original{p}"));
+                result.fanart_url = r
                     .backdrop_path
                     .as_ref()
-                    .map(|p| format!("https://image.tmdb.org/t/p/original{p}")),
-                artist: None,
-                album: None,
-                track_number: None,
-                author: None,
-                cover_url: None,
-                tmdb_id: Some(r.id as u64),
-                musicbrainz_id: None,
-                openlibrary_id: None,
+                    .map(|p| format!("https://image.tmdb.org/t/p/original{p}"));
+                result.tmdb_id = Some(r.id as u64);
+                if let Some(year) = year {
+                    result.push_evidence(format!("TMDB first air year {year}"));
+                }
+                result
             })
             .collect())
     }
@@ -173,30 +172,21 @@ impl TmdbScraper {
         let resp = self.client.get(&url).send().await?;
         let ep: TmdbEpisode = resp.json().await?;
 
-        Ok(Some(ScrapeResult {
-            source: ScrapeSource::Tmdb,
-            title: String::new(),
-            title_original: None,
-            year: None,
-            overview: ep.overview.clone(),
-            rating: ep.vote_average,
-            season_number: Some(season),
-            episode_number: Some(episode),
-            episode_name: Some(ep.name.clone()),
-            poster_url: ep
-                .still_path
-                .as_ref()
-                .map(|p| format!("https://image.tmdb.org/t/p/original{p}")),
-            fanart_url: None,
-            artist: None,
-            album: None,
-            track_number: None,
-            author: None,
-            cover_url: None,
-            tmdb_id: Some(tv_id),
-            musicbrainz_id: None,
-            openlibrary_id: None,
-        }))
+        let mut result = ScrapeResult::empty(ScrapeSource::Tmdb, "").with_confidence(0.94);
+        result.overview = ep.overview.clone();
+        result.rating = ep.vote_average;
+        result.season_number = Some(season);
+        result.episode_number = Some(episode);
+        result.episode_name = Some(ep.name.clone());
+        result.poster_url = ep
+            .still_path
+            .as_ref()
+            .map(|p| format!("https://image.tmdb.org/t/p/original{p}"));
+        result.tmdb_id = Some(tv_id);
+        result.push_evidence(format!(
+            "TMDB episode lookup tv_id={tv_id} season={season} episode={episode}"
+        ));
+        Ok(Some(result))
     }
 }
 

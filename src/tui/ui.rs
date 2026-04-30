@@ -124,7 +124,10 @@ fn draw_content(f: &mut Frame, app: &App, area: Rect) {
                         .map(|it| it.quality_score)
                         .fold(0.0, f64::max);
                     Row::new(vec![
-                        Cell::from(super::truncate_str(&group.content_id, 34)),
+                        Cell::from(super::truncate_str(
+                            &format!("{:?}: {}", group.kind, group.content_id),
+                            34,
+                        )),
                         Cell::from(group.items.len().to_string()),
                         Cell::from(keep.to_string()),
                         Cell::from(remove.to_string()),
@@ -168,16 +171,22 @@ fn draw_content(f: &mut Frame, app: &App, area: Rect) {
                             28,
                         )),
                         Cell::from(plan.subtitle_plans.len().to_string()),
+                        Cell::from(if plan.conflicts.is_empty() {
+                            "ok".into()
+                        } else {
+                            plan.conflicts.len().to_string()
+                        }),
                     ])
                 })
                 .collect();
             (
                 rows,
-                Row::new(vec!["Old", "New", "Subs"]),
+                Row::new(vec!["Old", "New", "Subs", "Conflicts"]),
                 vec![
                     Constraint::Length(29),
                     Constraint::Length(29),
                     Constraint::Length(6),
+                    Constraint::Length(10),
                 ],
                 format!(" {} rename plans ", filtered.len()),
             )
@@ -215,18 +224,31 @@ fn draw_content(f: &mut Frame, app: &App, area: Rect) {
                         } else {
                             plan.image_urls.len().to_string()
                         }),
+                        Cell::from(if plan.conflicts.is_empty() {
+                            "ok".into()
+                        } else {
+                            plan.conflicts.len().to_string()
+                        }),
                     ])
                 })
                 .collect();
             (
                 rows,
-                Row::new(vec!["Action", "Source", "Target Dir", "NFO", "Img"]),
+                Row::new(vec![
+                    "Action",
+                    "Source",
+                    "Target Dir",
+                    "NFO",
+                    "Img",
+                    "Conflicts",
+                ]),
                 vec![
                     Constraint::Length(10),
                     Constraint::Length(25),
                     Constraint::Length(29),
                     Constraint::Length(5),
                     Constraint::Length(5),
+                    Constraint::Length(10),
                 ],
                 format!(" {} organize plans ", filtered.len()),
             )
@@ -259,6 +281,21 @@ fn draw_content(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
+    if app.mode == Mode::Confirm {
+        let detail = app
+            .confirm_lines()
+            .into_iter()
+            .map(Line::from)
+            .collect::<Vec<_>>();
+        f.render_widget(
+            Paragraph::new(detail)
+                .block(Block::bordered().title(" Confirm "))
+                .wrap(Wrap { trim: true }),
+            area,
+        );
+        return;
+    }
+
     let detail = match app.tab {
         Tab::Scan => {
             let filtered = app.filtered_items();
@@ -278,6 +315,13 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
                         s.push_str(&format!("E{e:02}"));
                     }
                     lines.push(Line::from(s));
+                    lines.push(Line::from(format!(
+                        "Parsed: {:?} conf={:.2}",
+                        p.parse_source, p.confidence
+                    )));
+                    for detail in p.evidence.iter().take(3) {
+                        lines.push(Line::from(format!("  parse: {detail}")));
+                    }
                 }
                 if let Some(q) = &item.quality {
                     lines.push(Line::from(format!(
@@ -289,7 +333,71 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
                     )));
                 }
                 if let Some(s) = &item.scraped {
-                    lines.push(Line::from(format!("Scraped: {:?} {}", s.source, s.title)));
+                    lines.push(Line::from(format!(
+                        "Scraped: {:?} {} conf={:.2}",
+                        s.source, s.title, s.confidence
+                    )));
+                    for detail in s.evidence.iter().take(4) {
+                        lines.push(Line::from(format!("  scrape: {detail}")));
+                    }
+                }
+                let dedup_groups = app.dedup_groups_for_item(&item.path);
+                if !dedup_groups.is_empty() {
+                    for group in dedup_groups {
+                        lines.push(Line::from(format!(
+                            "Dedup: {:?} {}",
+                            group.kind, group.summary
+                        )));
+                        for entry in &group.items {
+                            if app.items[entry.index].path == item.path {
+                                lines.push(Line::from(format!(
+                                    "  {} {}",
+                                    if entry.is_keep { "KEEP" } else { "DROP" },
+                                    entry.rationale
+                                )));
+                                if !entry.basis.is_empty() {
+                                    lines.push(Line::from(format!(
+                                        "  basis: {}",
+                                        entry.basis.join(", ")
+                                    )));
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some(plan) = app.rename_plan_for_item(&item.path) {
+                    lines.push(Line::from(format!("Rename: {}", plan.new_path.display())));
+                    for reason in &plan.rationale {
+                        lines.push(Line::from(format!("  why: {reason}")));
+                    }
+                    for conflict in &plan.conflicts {
+                        lines.push(Line::from(format!("  conflict: {conflict}")));
+                    }
+                }
+                let organize_plans = app.organize_plans_for_item(&item.path);
+                if !organize_plans.is_empty() {
+                    for plan in organize_plans {
+                        lines.push(Line::from(format!(
+                            "Organize: {:?} -> {}",
+                            plan.action,
+                            plan.target.display()
+                        )));
+                        for reason in &plan.rationale {
+                            lines.push(Line::from(format!("  why: {reason}")));
+                        }
+                        lines.push(Line::from(format!(
+                            "  assets: nfo={} images={}",
+                            if plan.nfo_content.is_some() {
+                                "yes"
+                            } else {
+                                "no"
+                            },
+                            plan.image_urls.len()
+                        )));
+                        for conflict in &plan.conflicts {
+                            lines.push(Line::from(format!("  conflict: {conflict}")));
+                        }
+                    }
                 }
                 lines
             } else {
@@ -300,18 +408,31 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
             let filtered = app.filtered_dedup_groups();
             if app.selected < filtered.len() {
                 let (_, group) = &filtered[app.selected];
-                let mut lines = vec![Line::from(format!("Group: {}", group.content_id))];
+                let mut lines = vec![
+                    Line::from(format!("Group: {}", group.content_id)),
+                    Line::from(format!("Kind: {:?}", group.kind)),
+                    Line::from(format!("Strategy: {}", group.keep_strategy)),
+                    Line::from(format!("Summary: {}", group.summary)),
+                ];
+                for guard in &group.guardrails {
+                    lines.push(Line::from(format!("Guard: {guard}")));
+                }
                 for entry in &group.items {
                     let item = &app.items[entry.index];
                     lines.push(Line::from(format!(
-                        "{} {} score={:.1}",
+                        "{} {} score={:.1} meta={:.2}",
                         if entry.is_keep { "KEEP" } else { "DROP" },
                         item.path
                             .file_name()
                             .map(|f| f.to_string_lossy())
                             .unwrap_or_default(),
-                        entry.quality_score
+                        entry.quality_score,
+                        entry.metadata_confidence
                     )));
+                    lines.push(Line::from(format!("  why: {}", entry.rationale)));
+                    if !entry.basis.is_empty() {
+                        lines.push(Line::from(format!("  basis: {}", entry.basis.join(", "))));
+                    }
                 }
                 lines
             } else {
@@ -326,6 +447,12 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
                     Line::from(format!("Old: {}", plan.old_path.display())),
                     Line::from(format!("New: {}", plan.new_path.display())),
                 ];
+                for reason in &plan.rationale {
+                    lines.push(Line::from(format!("Why: {reason}")));
+                }
+                for conflict in &plan.conflicts {
+                    lines.push(Line::from(format!("Conflict: {conflict}")));
+                }
                 for sub in &plan.subtitle_plans {
                     lines.push(Line::from(format!(
                         "Sub: {} -> {}",
@@ -355,12 +482,43 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
                         }
                     )),
                     Line::from(format!("Images: {}", plan.image_urls.len())),
+                    Line::from(format!(
+                        "Conflicts: {}",
+                        if plan.conflicts.is_empty() {
+                            "none".into()
+                        } else {
+                            plan.conflicts.len().to_string()
+                        }
+                    )),
                 ]
+                .into_iter()
+                .chain(
+                    plan.rationale
+                        .iter()
+                        .map(|reason| Line::from(format!("Why: {reason}"))),
+                )
+                .chain(
+                    plan.conflicts
+                        .iter()
+                        .map(|conflict| Line::from(format!("Conflict: {conflict}"))),
+                )
+                .collect()
             } else {
                 vec![Line::from("No plan selected")]
             }
         }
     };
+    let mut detail = detail;
+    let last_report = app.last_report_lines();
+    if !last_report.is_empty() {
+        if !detail.is_empty() {
+            detail.push(Line::from(""));
+        }
+        detail.push(Line::from("Last Run"));
+        for line in last_report {
+            detail.push(Line::from(line));
+        }
+    }
     f.render_widget(
         Paragraph::new(detail)
             .block(Block::bordered().title(" Detail "))

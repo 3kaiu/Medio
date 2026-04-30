@@ -4,6 +4,7 @@ pub mod hasher;
 pub mod identifier;
 pub mod keyword_filter;
 pub mod oplog;
+pub mod pipeline;
 pub mod runtime;
 pub mod scanner;
 pub mod types;

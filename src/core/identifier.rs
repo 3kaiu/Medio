@@ -73,6 +73,16 @@ impl Identifier {
             let suffix_start = caps.get(2)?.start();
             let tags = extract_media_tags(cleaned);
             let media_suffix = extract_media_suffix_from_tags(&tags, cleaned, suffix_start);
+            let mut evidence = vec!["matched TV pattern SxxExx".to_string()];
+            if let Some(year) = extract_year(cleaned) {
+                evidence.push(format!("detected year {year}"));
+            }
+            if let Some(resolution) = &tags.resolution {
+                evidence.push(format!("detected resolution tag {resolution}"));
+            }
+            if let Some(codec) = &tags.codec {
+                evidence.push(format!("detected codec tag {codec}"));
+            }
             return Some(ParsedInfo {
                 raw_title,
                 season: Some(caps.get(2)?.as_str().parse().ok()?),
@@ -84,6 +94,8 @@ impl Identifier {
                 release_group: tags.release_group,
                 media_suffix,
                 parse_source: ParseSource::Regex,
+                confidence: 0.96,
+                evidence,
             });
         }
 
@@ -92,6 +104,13 @@ impl Identifier {
             let suffix_start = caps.get(2)?.start();
             let tags = extract_media_tags(cleaned);
             let media_suffix = extract_media_suffix_from_tags(&tags, cleaned, suffix_start);
+            let mut evidence = vec!["matched TV pattern xxXyy".to_string()];
+            if let Some(year) = extract_year(cleaned) {
+                evidence.push(format!("detected year {year}"));
+            }
+            if let Some(source) = &tags.source {
+                evidence.push(format!("detected source tag {source}"));
+            }
             return Some(ParsedInfo {
                 raw_title,
                 season: Some(caps.get(2)?.as_str().parse().ok()?),
@@ -103,6 +122,8 @@ impl Identifier {
                 release_group: tags.release_group,
                 media_suffix,
                 parse_source: ParseSource::Regex,
+                confidence: 0.95,
+                evidence,
             });
         }
 
@@ -111,6 +132,10 @@ impl Identifier {
             let suffix_start = caps.get(3)?.start();
             let tags = extract_media_tags(cleaned);
             let media_suffix = extract_media_suffix_from_tags(&tags, cleaned, suffix_start);
+            let mut evidence = vec!["matched bracketed Chinese season/episode pattern".to_string()];
+            if let Some(group) = &tags.release_group {
+                evidence.push(format!("detected release group {group}"));
+            }
             return Some(ParsedInfo {
                 raw_title,
                 season: Some(caps.get(2)?.as_str().parse().ok()?),
@@ -122,6 +147,8 @@ impl Identifier {
                 release_group: tags.release_group,
                 media_suffix,
                 parse_source: ParseSource::Regex,
+                confidence: 0.97,
+                evidence,
             });
         }
 
@@ -130,6 +157,10 @@ impl Identifier {
             let suffix_start = caps.get(3)?.start();
             let tags = extract_media_tags(cleaned);
             let media_suffix = extract_media_suffix_from_tags(&tags, cleaned, suffix_start);
+            let mut evidence = vec!["matched bracketed English season/episode pattern".to_string()];
+            if let Some(resolution) = &tags.resolution {
+                evidence.push(format!("detected resolution tag {resolution}"));
+            }
             return Some(ParsedInfo {
                 raw_title,
                 season: Some(caps.get(2)?.as_str().parse().ok()?),
@@ -141,6 +172,8 @@ impl Identifier {
                 release_group: tags.release_group,
                 media_suffix,
                 parse_source: ParseSource::Regex,
+                confidence: 0.97,
+                evidence,
             });
         }
 
@@ -160,6 +193,13 @@ impl Identifier {
             let suffix_start = caps.get(2)?.end();
             let tags = extract_media_tags(cleaned);
             let media_suffix = extract_media_suffix_from_tags(&tags, cleaned, suffix_start);
+            let mut evidence = vec![
+                "matched movie title + year pattern".to_string(),
+                format!("validated year {year}"),
+            ];
+            if let Some(source) = &tags.source {
+                evidence.push(format!("detected source tag {source}"));
+            }
             return Some(ParsedInfo {
                 raw_title,
                 year: Some(year),
@@ -171,6 +211,8 @@ impl Identifier {
                 release_group: tags.release_group,
                 media_suffix,
                 parse_source: ParseSource::Regex,
+                confidence: 0.92,
+                evidence,
             });
         }
 
@@ -212,6 +254,11 @@ impl Identifier {
             release_group: tags.release_group,
             media_suffix,
             parse_source: ParseSource::Regex,
+            confidence: 0.55,
+            evidence: vec![
+                "fallback parse after stripping known media tags".into(),
+                "no season/episode or title-year anchor matched".into(),
+            ],
         }
     }
 }

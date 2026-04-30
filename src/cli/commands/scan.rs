@@ -1,49 +1,31 @@
+use crate::cli::report::ScanCommandReport;
 use crate::core::config::AppConfig;
-use crate::core::context_infer::ContextInfer;
-use crate::core::identifier::Identifier;
-use crate::core::keyword_filter::KeywordFilter;
-use crate::core::scanner::Scanner;
-use crate::db::cache::Cache;
-use crate::models::media::{MediaItem, ScanIndex};
-use crate::scraper;
+use crate::core::pipeline::Pipeline;
+use crate::models::media::MediaItem;
 use std::path::Path;
 
 pub fn run(path: &str, config: &AppConfig, json_output: bool, process: bool, with_scrape: bool) {
     let root = Path::new(path);
-    if !root.exists() {
-        eprintln!("Error: path does not exist: {path}");
-        return;
-    }
-    if !root.is_dir() {
-        eprintln!("Error: path is not a directory: {path}");
-        return;
-    }
+    let pipeline = Pipeline::new(config);
+    let mut state = match pipeline.scan_root(root) {
+        Ok(state) => state,
+        Err(err) => {
+            eprintln!("{err}");
+            return;
+        }
+    };
 
-    // Step 1: Scan
-    let scanner = Scanner::new(config.scan.clone());
-    let mut items = scanner.scan(root);
-
-    if items.is_empty() {
+    if state.items.is_empty() {
         println!("No media files found.");
         return;
     }
 
-    persist_scan_index(config, root, &items);
-
     let process = process || with_scrape;
 
     if process {
-        // Step 2: Keyword filter + Identify
-        let keyword_filter = KeywordFilter::new(config.scan.keyword_filter.clone());
-        let identifier = Identifier::new(keyword_filter);
-        identifier.parse_batch(&mut items);
+        pipeline.identify(&mut state);
+        pipeline.infer_context(&mut state);
 
-        // Step 3: Context inference (parent dir)
-        for item in items.iter_mut() {
-            ContextInfer::enrich_item(item);
-        }
-
-        // Step 4: Optional scrape
         if with_scrape {
             let rt = match crate::core::runtime::build() {
                 Ok(rt) => rt,
@@ -53,40 +35,26 @@ pub fn run(path: &str, config: &AppConfig, json_output: bool, process: bool, wit
                 }
             };
             rt.block_on(async {
-                scraper::populate_scrape_results(&mut items, config).await;
+                pipeline.scrape(&mut state).await;
             });
         }
     }
 
-    // Output
     if json_output {
-        let json = serde_json::to_string_pretty(&items)
-            .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"));
+        let json = serde_json::to_string_pretty(&ScanCommandReport::new(
+            state.root.display().to_string(),
+            &state.item_source,
+            process,
+            with_scrape,
+            &state.stages,
+            &state.items,
+        ))
+        .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"));
         println!("{json}");
     } else if process {
-        print_processed_scan_table(&items);
+        print_processed_scan_table(&state.items);
     } else {
-        print_structure_table(root, &items);
-    }
-}
-
-fn persist_scan_index(config: &AppConfig, root: &Path, items: &[MediaItem]) {
-    let cache_path = config.cache_path();
-    let Some(root_key) = root.to_str() else {
-        return;
-    };
-
-    let Ok(cache) = Cache::open(&cache_path) else {
-        return;
-    };
-
-    let index = ScanIndex {
-        root: root.to_path_buf(),
-        items: items.to_vec(),
-    };
-
-    if cache.set_scan_index(root_key, &index).is_ok() {
-        let _ = cache.flush();
+        print_structure_table(root, &state.items);
     }
 }
 

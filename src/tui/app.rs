@@ -1,17 +1,10 @@
 use crate::core::config::AppConfig;
-use crate::core::context_infer::ContextInfer;
-use crate::core::hasher::FileHasher;
-use crate::core::identifier::Identifier;
-use crate::core::keyword_filter::KeywordFilter;
-use crate::core::scanner::Scanner;
-use crate::db::cache::Cache;
+use crate::core::pipeline::{Pipeline, ProbeBackend};
 use crate::engine::deduplicator::{Deduplicator, DuplicateGroup};
+use crate::engine::execution_report::ExecutionReport;
 use crate::engine::organizer::{OrganizePlan, Organizer};
 use crate::engine::renamer::Renamer;
-use crate::media::native_probe::NativeProbe;
-use crate::media::probe::MediaProbe;
 use crate::models::media::MediaItem;
-use crate::scraper;
 use std::cell::RefCell;
 #[cfg(test)]
 use std::path::PathBuf;
@@ -76,6 +69,7 @@ pub struct App {
     pub scroll_offset: usize,
     pub search_query: String,
     pub status_msg: String,
+    pub last_execution_report: Option<ExecutionReport>,
     pub should_quit: bool,
     pub path: String,
     pub pending_action: Option<PendingAction>,
@@ -98,6 +92,7 @@ impl App {
             scroll_offset: 0,
             search_query: String::new(),
             status_msg: "Press 's' to scan, Tab to switch views, q to quit".into(),
+            last_execution_report: None,
             should_quit: false,
             path,
             pending_action: None,
@@ -108,32 +103,28 @@ impl App {
     }
 
     pub fn scan(&mut self) {
-        let scanner = Scanner::new(self.config.scan.clone());
         let path = std::path::Path::new(&self.path);
-        if !path.exists() {
-            self.status_msg = format!("Path not found: {}", self.path);
-            return;
-        }
+        let pipeline = Pipeline::new(&self.config);
+        let mut state = match pipeline.scan_root(path) {
+            Ok(state) => state,
+            Err(err) => {
+                self.status_msg = err;
+                return;
+            }
+        };
 
-        self.items = scanner.scan(path);
         self.data_gen += 1;
-
-        if self.items.is_empty() {
+        if state.items.is_empty() {
+            self.items.clear();
+            self.dedup_groups.clear();
+            self.rename_plans.clear();
+            self.organize_plans.clear();
             self.status_msg = "No media files found.".into();
             return;
         }
 
-        // Identify
-        let keyword_filter = KeywordFilter::new(self.config.scan.keyword_filter.clone());
-        let identifier = Identifier::new(keyword_filter);
-        identifier.parse_batch(&mut self.items);
-
-        // Context inference
-        for item in self.items.iter_mut() {
-            ContextInfer::enrich_item(item);
-        }
-
-        // Shared scrape path
+        pipeline.identify(&mut state);
+        pipeline.infer_context(&mut state);
         let rt = match crate::core::runtime::build() {
             Ok(rt) => rt,
             Err(err) => {
@@ -142,24 +133,13 @@ impl App {
             }
         };
         rt.block_on(async {
-            scraper::populate_scrape_results(&mut self.items, &self.config).await;
+            pipeline.scrape(&mut state).await;
         });
 
-        // Hash and quality preview for dedup scoring
-        let cache = Cache::open(&self.config.cache_path()).ok();
-        if let Some(ref cache) = cache {
-            let _ = cache.cleanup(self.config.cache.ttl_days);
-        }
-        FileHasher::compute_all_with_cache(&mut self.items, cache.as_ref());
+        pipeline.hash(&mut state);
+        pipeline.probe(&mut state, ProbeBackend::Native);
+        self.items = state.items;
 
-        let probe = NativeProbe::new(self.config.quality.clone());
-        for item in self.items.iter_mut() {
-            if let Ok(quality) = probe.probe(&item.path) {
-                item.quality = Some(quality);
-            }
-        }
-
-        // Derived previews for other tabs
         let deduplicator = Deduplicator::new(self.config.dedup.clone());
         self.dedup_groups = deduplicator.analyze(&self.items);
         self.data_gen += 1;
@@ -378,6 +358,32 @@ impl App {
         }
     }
 
+    pub fn dedup_groups_for_item(&self, path: &std::path::Path) -> Vec<&DuplicateGroup> {
+        self.dedup_groups
+            .iter()
+            .filter(|group| {
+                group
+                    .items
+                    .iter()
+                    .any(|entry| self.items[entry.index].path == path)
+            })
+            .collect()
+    }
+
+    pub fn rename_plan_for_item(
+        &self,
+        path: &std::path::Path,
+    ) -> Option<&crate::models::media::RenamePlan> {
+        self.rename_plans.iter().find(|plan| plan.old_path == path)
+    }
+
+    pub fn organize_plans_for_item(&self, path: &std::path::Path) -> Vec<&OrganizePlan> {
+        self.organize_plans
+            .iter()
+            .filter(|plan| plan.source == path)
+            .collect()
+    }
+
     pub fn current_len(&self) -> usize {
         match self.tab {
             Tab::Scan => self.filtered_items().len(),
@@ -387,16 +393,108 @@ impl App {
         }
     }
 
+    pub fn confirm_lines(&self) -> Vec<String> {
+        match self.pending_action {
+            Some(PendingAction::Rename) => {
+                let total = self.rename_plans.len();
+                let conflicted = self
+                    .rename_plans
+                    .iter()
+                    .filter(|plan| !plan.conflicts.is_empty())
+                    .count();
+                let ready = total.saturating_sub(conflicted);
+                vec![
+                    format!("Pending: Rename {total} plans"),
+                    format!("Ready: {ready}"),
+                    format!("Blocked: {conflicted}"),
+                    "Enter/y confirms execution; n/Esc cancels".into(),
+                ]
+            }
+            Some(PendingAction::Dedup) => {
+                let groups = self.dedup_groups.len();
+                let removable = self
+                    .dedup_groups
+                    .iter()
+                    .map(|group| group.items.iter().filter(|item| !item.is_keep).count())
+                    .sum::<usize>();
+                let guarded = self
+                    .dedup_groups
+                    .iter()
+                    .filter(|group| !group.guardrails.is_empty())
+                    .count();
+                let ready_groups = groups.saturating_sub(guarded);
+                vec![
+                    format!("Pending: Dedup {groups} groups / {removable} removals"),
+                    format!("Ready groups: {ready_groups}"),
+                    format!("Guarded groups: {guarded}"),
+                    "Enter/y confirms execution; n/Esc cancels".into(),
+                ]
+            }
+            Some(PendingAction::Organize) => {
+                let total = self.organize_plans.len();
+                let conflicted = self
+                    .organize_plans
+                    .iter()
+                    .filter(|plan| !plan.conflicts.is_empty())
+                    .count();
+                let ready = total.saturating_sub(conflicted);
+                let nfo_ready = self
+                    .organize_plans
+                    .iter()
+                    .filter(|plan| plan.nfo_content.is_some())
+                    .count();
+                let image_ready = self
+                    .organize_plans
+                    .iter()
+                    .filter(|plan| !plan.image_urls.is_empty())
+                    .count();
+                vec![
+                    format!("Pending: Organize {total} plans"),
+                    format!("Ready: {ready}"),
+                    format!("Blocked: {conflicted}"),
+                    format!("Trusted assets: nfo={nfo_ready} image={image_ready}"),
+                    "Enter/y confirms execution; n/Esc cancels".into(),
+                ]
+            }
+            None => vec!["Nothing to confirm".into()],
+        }
+    }
+
+    pub fn last_report_lines(&self) -> Vec<String> {
+        let Some(report) = &self.last_execution_report else {
+            return Vec::new();
+        };
+
+        let mut lines = vec![
+            format!("Last Run: {}", report.summary_line()),
+            format!("Operation: {}", report.operation),
+        ];
+        lines.extend(report.details.iter().take(6).cloned());
+        if report.details.len() > 6 {
+            lines.push(format!(
+                "... {} more detail lines",
+                report.details.len() - 6
+            ));
+        }
+        lines
+    }
+
     pub fn request_rename_execute(&mut self) {
         if self.rename_plans.is_empty() {
             self.status_msg = "No rename plans to execute".into();
             return;
         }
+        let conflicted = self
+            .rename_plans
+            .iter()
+            .filter(|plan| !plan.conflicts.is_empty())
+            .count();
         self.pending_action = Some(PendingAction::Rename);
         self.mode = Mode::Confirm;
         self.status_msg = format!(
-            "Execute {} rename plans? [Enter/y=yes, n/Esc=no]",
-            self.rename_plans.len()
+            "Confirm rename: total={} blocked={} [Enter/y=yes, n/Esc=no]",
+            self.rename_plans.len(),
+            conflicted
         );
     }
 
@@ -410,6 +508,11 @@ impl App {
             .iter()
             .map(|group| group.items.iter().filter(|item| !item.is_keep).count())
             .sum::<usize>();
+        let guarded = self
+            .dedup_groups
+            .iter()
+            .filter(|group| !group.guardrails.is_empty())
+            .count();
         if remove_count == 0 {
             self.status_msg = "No duplicate items marked for removal".into();
             return;
@@ -417,8 +520,8 @@ impl App {
         self.pending_action = Some(PendingAction::Dedup);
         self.mode = Mode::Confirm;
         self.status_msg = format!(
-            "Execute dedup for {} files? [Enter/y=yes, n/Esc=no]",
-            remove_count
+            "Confirm dedup: removals={} guarded_groups={} [Enter/y=yes, n/Esc=no]",
+            remove_count, guarded
         );
     }
 
@@ -427,11 +530,29 @@ impl App {
             self.status_msg = "No organize plans to execute".into();
             return;
         }
+        let conflicted = self
+            .organize_plans
+            .iter()
+            .filter(|plan| !plan.conflicts.is_empty())
+            .count();
+        let nfo_ready = self
+            .organize_plans
+            .iter()
+            .filter(|plan| plan.nfo_content.is_some())
+            .count();
+        let image_ready = self
+            .organize_plans
+            .iter()
+            .filter(|plan| !plan.image_urls.is_empty())
+            .count();
         self.pending_action = Some(PendingAction::Organize);
         self.mode = Mode::Confirm;
         self.status_msg = format!(
-            "Execute {} organize plans? [Enter/y=yes, n/Esc=no]",
-            self.organize_plans.len()
+            "Confirm organize: total={} blocked={} nfo={} image={} [Enter/y=yes, n/Esc=no]",
+            self.organize_plans.len(),
+            conflicted,
+            nfo_ready,
+            image_ready
         );
     }
 
@@ -440,16 +561,13 @@ impl App {
             Some(PendingAction::Rename) => {
                 let renamer = Renamer::new(self.config.rename.clone());
                 let dry_run = self.config.general.dry_run;
-                let actions = renamer.execute(&self.rename_plans, dry_run);
-                let renamed = actions
-                    .iter()
-                    .filter(|a| a.starts_with("[renamed]") || a.starts_with("[dry-run]"))
-                    .count();
+                let report = renamer.execute_report(&self.rename_plans, dry_run);
+                self.last_execution_report = Some(report.clone());
                 self.mode = Mode::Normal;
-                self.status_msg = format!("Rename executed: {} actions", renamed);
+                self.status_msg = report.summary_line();
                 if !dry_run {
                     self.scan();
-                    self.status_msg = format!("Rename executed: {} actions", renamed);
+                    self.status_msg = report.summary_line();
                 }
             }
             Some(PendingAction::Dedup) => {
@@ -463,46 +581,32 @@ impl App {
                         return;
                     }
                 };
-                let actions = rt
-                    .block_on(deduplicator.execute(&self.dedup_groups, &self.items, dry_run))
-                    .unwrap_or_else(|e| vec![format!("Error: {e}")]);
-                let processed = actions
-                    .iter()
-                    .filter(|a| {
-                        a.starts_with("[trash]")
-                            || a.starts_with("[move]")
-                            || a.starts_with("[report]")
-                            || a.starts_with("[dry-run]")
-                    })
-                    .count();
+                let report = rt
+                    .block_on(deduplicator.execute_report(&self.dedup_groups, &self.items, dry_run))
+                    .unwrap_or_else(|e| {
+                        let mut report = ExecutionReport::new("dedup");
+                        report.errors = 1;
+                        report.details.push(format!("Error: {e}"));
+                        report
+                    });
+                self.last_execution_report = Some(report.clone());
                 self.mode = Mode::Normal;
-                self.status_msg = format!("Dedup executed: {} actions", processed);
+                self.status_msg = report.summary_line();
                 if !dry_run {
                     self.scan();
-                    self.status_msg = format!("Dedup executed: {} actions", processed);
+                    self.status_msg = report.summary_line();
                 }
             }
             Some(PendingAction::Organize) => {
                 let organizer = Organizer::new(self.config.organize.clone());
                 let dry_run = self.config.general.dry_run;
-                let actions = organizer.execute(&self.organize_plans, dry_run);
-                let processed = actions
-                    .iter()
-                    .filter(|a| {
-                        a.starts_with("[move]")
-                            || a.starts_with("[copy]")
-                            || a.starts_with("[hardlink]")
-                            || a.starts_with("[symlink]")
-                            || a.starts_with("[nfo]")
-                            || a.starts_with("[image]")
-                            || a.starts_with("[dry-run]")
-                    })
-                    .count();
+                let report = organizer.execute_report(&self.organize_plans, dry_run);
+                self.last_execution_report = Some(report.clone());
                 self.mode = Mode::Normal;
-                self.status_msg = format!("Organize executed: {} actions", processed);
+                self.status_msg = report.summary_line();
                 if !dry_run {
                     self.scan();
-                    self.status_msg = format!("Organize executed: {} actions", processed);
+                    self.status_msg = report.summary_line();
                 }
             }
             None => {
@@ -532,7 +636,7 @@ impl App {
 mod tests {
     use super::*;
     use crate::core::types::OrganizeMode;
-    use crate::engine::deduplicator::{DuplicateGroup, DuplicateItem};
+    use crate::engine::deduplicator::{DuplicateGroup, DuplicateItem, DuplicateKind};
     use crate::engine::organizer::{OrganizeAction, OrganizePlan};
     use crate::models::media::{MediaItem, MediaType, RenamePlan};
 
@@ -553,6 +657,8 @@ mod tests {
             parsed: None,
             quality: None,
             scraped: None,
+            content_evidence: None,
+            identity_resolution: None,
             hash: None,
             rename_plan: None,
         }
@@ -566,6 +672,9 @@ mod tests {
             new_path: PathBuf::from("/tmp/new.mkv"),
             subtitle_plans: Vec::new(),
             directory_plans: Vec::new(),
+            decision: Default::default(),
+            rationale: vec!["template: {title} ({year})".into()],
+            conflicts: Vec::new(),
         });
 
         app.request_rename_execute();
@@ -582,6 +691,9 @@ mod tests {
             new_path: PathBuf::from("/tmp/new.mkv"),
             subtitle_plans: Vec::new(),
             directory_plans: Vec::new(),
+            decision: Default::default(),
+            rationale: vec!["template: {title} ({year})".into()],
+            conflicts: Vec::new(),
         });
 
         app.request_rename_execute();
@@ -590,6 +702,7 @@ mod tests {
         assert_eq!(app.mode, Mode::Normal);
         assert_eq!(app.pending_action, None);
         assert!(app.status_msg.contains("Rename executed"));
+        assert!(app.last_execution_report.is_some());
     }
 
     #[test]
@@ -599,16 +712,27 @@ mod tests {
         app.items.push(make_item("b.mkv"));
         app.dedup_groups.push(DuplicateGroup {
             content_id: "hash:1".into(),
+            kind: DuplicateKind::Exact,
+            keep_strategy: "HighestQuality".into(),
+            summary: "Exact duplicate group, strategy HighestQuality, keep a.mkv".into(),
+            decision: Default::default(),
+            guardrails: Vec::new(),
             items: vec![
                 DuplicateItem {
                     index: 0,
                     quality_score: 10.0,
+                    metadata_confidence: 0.95,
                     is_keep: true,
+                    rationale: "kept as best quality candidate".into(),
+                    basis: vec!["size=1024B".into()],
                 },
                 DuplicateItem {
                     index: 1,
                     quality_score: 5.0,
+                    metadata_confidence: 0.80,
                     is_keep: false,
+                    rationale: "exact duplicate; lower quality than kept candidate a.mkv".into(),
+                    basis: vec!["size=1024B".into()],
                 },
             ],
         });
@@ -617,6 +741,7 @@ mod tests {
 
         assert_eq!(app.mode, Mode::Confirm);
         assert_eq!(app.pending_action, Some(PendingAction::Dedup));
+        assert!(app.status_msg.contains("guarded_groups=0"));
     }
 
     #[test]
@@ -626,16 +751,27 @@ mod tests {
         app.items.push(make_item("b.mkv"));
         app.dedup_groups.push(DuplicateGroup {
             content_id: "hash:1".into(),
+            kind: DuplicateKind::Exact,
+            keep_strategy: "HighestQuality".into(),
+            summary: "Exact duplicate group, strategy HighestQuality, keep a.mkv".into(),
+            decision: Default::default(),
+            guardrails: Vec::new(),
             items: vec![
                 DuplicateItem {
                     index: 0,
                     quality_score: 10.0,
+                    metadata_confidence: 0.95,
                     is_keep: true,
+                    rationale: "kept as best quality candidate".into(),
+                    basis: vec!["size=1024B".into()],
                 },
                 DuplicateItem {
                     index: 1,
                     quality_score: 5.0,
+                    metadata_confidence: 0.80,
                     is_keep: false,
+                    rationale: "exact duplicate; lower quality than kept candidate a.mkv".into(),
+                    basis: vec!["size=1024B".into()],
                 },
             ],
         });
@@ -646,6 +782,7 @@ mod tests {
         assert_eq!(app.mode, Mode::Normal);
         assert_eq!(app.pending_action, None);
         assert!(app.status_msg.contains("Dedup executed"));
+        assert!(app.last_execution_report.is_some());
     }
 
     #[test]
@@ -657,12 +794,100 @@ mod tests {
             action: OrganizeAction::Move,
             nfo_content: None,
             image_urls: Vec::new(),
+            decision: Default::default(),
+            rationale: vec!["mode: Archive".into()],
+            conflicts: Vec::new(),
         });
 
         app.request_organize_execute();
 
         assert_eq!(app.mode, Mode::Confirm);
         assert_eq!(app.pending_action, Some(PendingAction::Organize));
+        assert!(app.status_msg.contains("nfo=0"));
+    }
+
+    #[test]
+    fn test_confirm_lines_include_guarded_dedup_summary() {
+        let mut app = make_app();
+        app.items.push(make_item("a.mkv"));
+        app.items.push(make_item("b.mkv"));
+        app.dedup_groups.push(DuplicateGroup {
+            content_id: "hash:1".into(),
+            kind: DuplicateKind::Version,
+            keep_strategy: "HighestQuality".into(),
+            summary: "Version duplicate group".into(),
+            decision: Default::default(),
+            guardrails: vec!["trusted identity too weak".into()],
+            items: vec![
+                DuplicateItem {
+                    index: 0,
+                    quality_score: 10.0,
+                    metadata_confidence: 0.6,
+                    is_keep: true,
+                    rationale: "keep".into(),
+                    basis: vec![],
+                },
+                DuplicateItem {
+                    index: 1,
+                    quality_score: 9.9,
+                    metadata_confidence: 0.6,
+                    is_keep: false,
+                    rationale: "drop".into(),
+                    basis: vec![],
+                },
+            ],
+        });
+        app.request_dedup_execute();
+        let lines = app.confirm_lines();
+        assert!(lines.iter().any(|line| line.contains("Guarded groups: 1")));
+    }
+
+    #[test]
+    fn test_confirm_lines_include_organize_asset_summary() {
+        let mut app = make_app();
+        app.organize_plans.push(OrganizePlan {
+            source: PathBuf::from("/tmp/a.mkv"),
+            target: PathBuf::from("/tmp/Movies/a.mkv"),
+            action: OrganizeAction::Move,
+            nfo_content: Some("<movie/>".into()),
+            image_urls: vec!["https://example.com/poster.jpg".into()],
+            decision: Default::default(),
+            rationale: vec!["mode: Archive".into()],
+            conflicts: Vec::new(),
+        });
+        app.request_organize_execute();
+        let lines = app.confirm_lines();
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Trusted assets: nfo=1 image=1"))
+        );
+    }
+
+    #[test]
+    fn test_last_report_lines_expose_recent_execution_summary() {
+        let mut app = make_app();
+        app.last_execution_report = Some(ExecutionReport {
+            operation: "rename".into(),
+            executed: 2,
+            blocked: 1,
+            guarded: 0,
+            skipped: 0,
+            errors: 0,
+            asset_generated: 0,
+            details: vec!["[renamed] /tmp/a -> /tmp/b".into()],
+        });
+        let lines = app.last_report_lines();
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Last Run: Rename executed: 2 actions"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("[renamed] /tmp/a -> /tmp/b"))
+        );
     }
 
     #[test]
@@ -673,6 +898,9 @@ mod tests {
             new_path: PathBuf::from("/tmp/new.mkv"),
             subtitle_plans: Vec::new(),
             directory_plans: Vec::new(),
+            decision: Default::default(),
+            rationale: vec!["template: {title} ({year})".into()],
+            conflicts: Vec::new(),
         });
 
         app.request_rename_execute();

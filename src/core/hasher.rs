@@ -210,6 +210,8 @@ mod tests {
             parsed: None,
             quality: None,
             scraped: None,
+            content_evidence: None,
+            identity_resolution: None,
             hash: None,
             rename_plan: None,
         }

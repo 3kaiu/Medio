@@ -1,6 +1,6 @@
 use crate::core::config::AiConfig;
 use crate::core::types::AiProvider;
-use crate::models::media::{ScrapeResult, ScrapeSource};
+use crate::models::media::{ParsedInfo, ScrapeResult, ScrapeSource};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
@@ -49,9 +49,19 @@ impl OpenAiCompat {
     }
 
     /// Identify media from filename using AI
+    #[allow(dead_code)]
     pub async fn identify(
         &self,
         filename: &str,
+    ) -> Result<Option<ScrapeResult>, Box<dyn std::error::Error>> {
+        self.identify_with_context(filename, &[], None).await
+    }
+
+    pub async fn identify_with_context(
+        &self,
+        filename: &str,
+        parent_dirs: &[String],
+        parsed: Option<&ParsedInfo>,
     ) -> Result<Option<ScrapeResult>, Box<dyn std::error::Error>> {
         if !self.is_configured() {
             return Ok(None);
@@ -62,7 +72,19 @@ impl OpenAiCompat {
             \"episode_name\":null,\"media_type\":\"movie|tv|music|novel\",\"artist\":null,\"album\":null,\
             \"author\":null}. If you cannot identify, return null for fields.";
 
-        let user = format!("Identify this media file: {filename}");
+        let mut user = format!("Identify this media file: {filename}");
+        if !parent_dirs.is_empty() {
+            user.push_str(&format!(
+                "\nParent directories: {}",
+                parent_dirs.join(" / ")
+            ));
+        }
+        if let Some(parsed) = parsed {
+            user.push_str(&format!(
+                "\nCurrent parsed hints: title='{}', year={:?}, season={:?}, episode={:?}",
+                parsed.raw_title, parsed.year, parsed.season, parsed.episode
+            ));
+        }
 
         let resp = self.chat(system, &user).await?;
 
@@ -77,27 +99,27 @@ impl OpenAiCompat {
             Err(_) => return Ok(None),
         };
 
-        Ok(Some(ScrapeResult {
-            source: ScrapeSource::AiAssist,
-            title: parsed.title.clone().unwrap_or_default(),
-            title_original: None,
-            year: parsed.year,
-            overview: None,
-            rating: None,
-            season_number: parsed.season,
-            episode_number: parsed.episode,
-            episode_name: parsed.episode_name,
-            poster_url: None,
-            fanart_url: None,
-            artist: parsed.artist,
-            album: parsed.album,
-            track_number: None,
-            author: parsed.author,
-            cover_url: None,
-            tmdb_id: None,
-            musicbrainz_id: None,
-            openlibrary_id: None,
-        }))
+        let mut result = ScrapeResult::empty(
+            ScrapeSource::AiAssist,
+            parsed.title.clone().unwrap_or_default(),
+        )
+        .with_confidence(0.62)
+        .with_evidence([
+            "metadata generated from AI filename identification".to_string(),
+            format!("input filename: {filename}"),
+        ]);
+        if !parent_dirs.is_empty() {
+            result.push_evidence(format!("AI context parents: {}", parent_dirs.join(" / ")));
+        }
+        result.year = parsed.year;
+        result.season_number = parsed.season;
+        result.episode_number = parsed.episode;
+        result.episode_name = parsed.episode_name;
+        result.artist = parsed.artist;
+        result.album = parsed.album;
+        result.author = parsed.author;
+
+        Ok(Some(result))
     }
 
     /// Suggest a better title for ambiguous filenames

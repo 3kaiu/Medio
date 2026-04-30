@@ -24,8 +24,23 @@ impl ContextInfer {
     pub fn infer(parsed: &ParsedInfo, parent_dirs: &[&Path]) -> ParsedInfo {
         let mut result = parsed.clone();
 
+        let before_title = result.raw_title.clone();
+        let before_year = result.year;
+        let before_season = result.season;
+        let before_episode = result.episode;
+
         fill_episode_markers_from_title(&mut result);
+        if result.episode != before_episode || result.season != before_season {
+            result.push_evidence("inferred episode markers from title pattern");
+            result.bump_confidence(0.72);
+        }
         if let Some(cleaned) = normalize_title_dir(&result.raw_title) {
+            if cleaned != result.raw_title {
+                result.push_evidence(format!(
+                    "normalized noisy title token stream to '{}'",
+                    cleaned
+                ));
+            }
             result.raw_title = cleaned;
         }
 
@@ -45,6 +60,11 @@ impl ContextInfer {
                         .and_then(|m| m.as_str().parse().ok());
                     if let Some(season) = s {
                         result.season = Some(season);
+                        result.push_evidence(format!(
+                            "inferred season {season} from parent directory '{}'",
+                            name
+                        ));
+                        result.bump_confidence(0.84);
                         if result.parse_source == ParseSource::Regex {
                             // Keep original source if regex already found something
                         } else {
@@ -70,6 +90,11 @@ impl ContextInfer {
                     && (1900..=2030).contains(&y)
                 {
                     result.year = Some(y);
+                    result.push_evidence(format!(
+                        "inferred year {y} from parent directory '{}'",
+                        name
+                    ));
+                    result.bump_confidence(0.8);
                     if result.parse_source != ParseSource::Regex {
                         result.parse_source = ParseSource::Context;
                     }
@@ -88,9 +113,21 @@ impl ContextInfer {
                 if let Some(cleaned) = normalize_title_dir(&name) {
                     result.raw_title = cleaned;
                     result.parse_source = ParseSource::Context;
+                    result.push_evidence(format!(
+                        "replaced placeholder title using parent directory '{}'",
+                        name
+                    ));
+                    result.bump_confidence(0.76);
                     break;
                 }
             }
+        }
+
+        if result.raw_title != before_title {
+            result.push_evidence(format!("final inferred title '{}'", result.raw_title));
+        }
+        if result.year != before_year && result.year.is_some() {
+            result.push_evidence("context inference filled missing year");
         }
 
         result
@@ -325,6 +362,8 @@ mod tests {
             release_group: None,
             media_suffix: None,
             parse_source: ParseSource::Regex,
+            confidence: 0.5,
+            evidence: Vec::new(),
         }
     }
 

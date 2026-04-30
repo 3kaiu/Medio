@@ -61,29 +61,19 @@ impl MusicBrainzScraper {
             .unwrap_or_default();
         let release = first.releases.first();
 
-        Ok(Some(ScrapeResult {
-            source: ScrapeSource::MusicBrainz,
-            title: first.title.clone(),
-            title_original: None,
-            year: release
-                .and_then(|r| r.date.as_ref())
-                .and_then(|d| d.get(..4).and_then(|y| y.parse().ok())),
-            overview: None,
-            rating: None,
-            season_number: None,
-            episode_number: None,
-            episode_name: None,
-            poster_url: None,
-            fanart_url: None,
-            artist: Some(artist_name),
-            album: release.map(|r| r.title.clone()),
-            track_number: None,
-            author: None,
-            cover_url: None,
-            tmdb_id: None,
-            musicbrainz_id: Some(first.id.clone()),
-            openlibrary_id: None,
-        }))
+        let mut result = ScrapeResult::empty(ScrapeSource::MusicBrainz, first.title.clone())
+            .with_confidence(0.86)
+            .with_evidence([
+                format!("MusicBrainz recording id={}", first.id),
+                format!("query artist='{}' title='{}'", artist, title),
+            ]);
+        result.year = release
+            .and_then(|r| r.date.as_ref())
+            .and_then(|d| d.get(..4).and_then(|y| y.parse().ok()));
+        result.artist = Some(artist_name);
+        result.album = release.map(|r| r.title.clone());
+        result.musicbrainz_id = Some(first.id.clone());
+        Ok(Some(result))
     }
 
     /// Search release (album) by artist + title
@@ -124,30 +114,20 @@ impl MusicBrainzScraper {
             .map(|a| a.name.clone())
             .unwrap_or_default();
 
-        Ok(Some(ScrapeResult {
-            source: ScrapeSource::MusicBrainz,
-            title: first.title.clone(),
-            title_original: None,
-            year: first
-                .date
-                .as_ref()
-                .and_then(|d| d.get(..4).and_then(|y| y.parse().ok())),
-            overview: None,
-            rating: None,
-            season_number: None,
-            episode_number: None,
-            episode_name: None,
-            poster_url: None,
-            fanart_url: None,
-            artist: Some(artist_name),
-            album: Some(first.title.clone()),
-            track_number: None,
-            author: None,
-            cover_url: None,
-            tmdb_id: None,
-            musicbrainz_id: Some(first.id.clone()),
-            openlibrary_id: None,
-        }))
+        let mut result = ScrapeResult::empty(ScrapeSource::MusicBrainz, first.title.clone())
+            .with_confidence(0.84)
+            .with_evidence([
+                format!("MusicBrainz release id={}", first.id),
+                format!("query artist='{}' album='{}'", artist, album),
+            ]);
+        result.year = first
+            .date
+            .as_ref()
+            .and_then(|d| d.get(..4).and_then(|y| y.parse().ok()));
+        result.artist = Some(artist_name);
+        result.album = Some(first.title.clone());
+        result.musicbrainz_id = Some(first.id.clone());
+        Ok(Some(result))
     }
 }
 

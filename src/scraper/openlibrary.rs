@@ -45,27 +45,23 @@ impl OpenLibraryScraper {
             .cover_i
             .map(|id| format!("https://covers.openlibrary.org/b/id/{id}-L.jpg"));
 
-        Ok(Some(ScrapeResult {
-            source: ScrapeSource::OpenLibrary,
-            title: first.title.clone().unwrap_or_default(),
-            title_original: None,
-            year: first.first_publish_year,
-            overview: None,
-            rating: None,
-            season_number: None,
-            episode_number: None,
-            episode_name: None,
-            poster_url: None,
-            fanart_url: None,
-            artist: None,
-            album: None,
-            track_number: None,
-            author: first.author_name.first().cloned(),
-            cover_url,
-            tmdb_id: None,
-            musicbrainz_id: None,
-            openlibrary_id: first.key.clone(),
-        }))
+        let mut result = ScrapeResult::empty(
+            ScrapeSource::OpenLibrary,
+            first.title.clone().unwrap_or_default(),
+        )
+        .with_confidence(0.83)
+        .with_evidence([
+            format!(
+                "OpenLibrary work key={}",
+                first.key.clone().unwrap_or_default()
+            ),
+            format!("query title '{}'", title),
+        ]);
+        result.year = first.first_publish_year;
+        result.author = first.author_name.first().cloned();
+        result.cover_url = cover_url;
+        result.openlibrary_id = first.key.clone();
+        Ok(Some(result))
     }
 }
 

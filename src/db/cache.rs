@@ -1,4 +1,4 @@
-use crate::models::media::{HashInfo, ScanIndex, ScrapeResult};
+use crate::models::media::{ContentEvidence, HashInfo, ScanIndex, ScrapeResult};
 use serde::{Deserialize, Serialize};
 use sled;
 use std::path::Path;
@@ -38,6 +38,24 @@ impl Cache {
 
     pub fn set_scrape(&self, key: &str, result: &ScrapeResult) -> Result<(), CacheError> {
         let full_key = format!("scrape:{key}");
+        let bytes = serde_json::to_vec(&CacheEntry {
+            updated_at: current_unix_ts(),
+            value: result.clone(),
+        })?;
+        self.db.insert(full_key, bytes)?;
+        Ok(())
+    }
+
+    // --- Content probe cache ---
+
+    pub fn get_content_probe(&self, key: &str) -> Option<ContentEvidence> {
+        let full_key = format!("content_probe:{key}");
+        let bytes = self.db.get(full_key).ok()??;
+        Self::decode_entry(&bytes)
+    }
+
+    pub fn set_content_probe(&self, key: &str, result: &ContentEvidence) -> Result<(), CacheError> {
+        let full_key = format!("content_probe:{key}");
         let bytes = serde_json::to_vec(&CacheEntry {
             updated_at: current_unix_ts(),
             value: result.clone(),
@@ -152,27 +170,27 @@ mod tests {
         let cache = Cache::open(&dir.path().join("cache.sled")).unwrap();
         let key = "legacy";
         let full_key = format!("scrape:{key}");
-        let payload = ScrapeResult {
-            source: crate::models::media::ScrapeSource::Guess,
-            title: "Legacy".into(),
-            title_original: None,
-            year: Some(2020),
-            overview: None,
-            rating: None,
-            season_number: None,
-            episode_number: None,
-            episode_name: None,
-            poster_url: None,
-            fanart_url: None,
-            artist: None,
-            album: None,
-            track_number: None,
-            author: None,
-            cover_url: None,
-            tmdb_id: None,
-            musicbrainz_id: None,
-            openlibrary_id: None,
-        };
+        let payload = serde_json::json!({
+            "source": "Guess",
+            "title": "Legacy",
+            "title_original": null,
+            "year": 2020,
+            "overview": null,
+            "rating": null,
+            "season_number": null,
+            "episode_number": null,
+            "episode_name": null,
+            "poster_url": null,
+            "fanart_url": null,
+            "artist": null,
+            "album": null,
+            "track_number": null,
+            "author": null,
+            "cover_url": null,
+            "tmdb_id": null,
+            "musicbrainz_id": null,
+            "openlibrary_id": null
+        });
 
         cache
             .db
@@ -180,6 +198,8 @@ mod tests {
             .unwrap();
         let loaded = cache.get_scrape(key).unwrap();
         assert_eq!(loaded.title, "Legacy");
+        assert_eq!(loaded.confidence, 0.0);
+        assert!(loaded.evidence.is_empty());
     }
 
     #[test]
@@ -230,6 +250,8 @@ mod tests {
                 parsed: None,
                 quality: None,
                 scraped: None,
+                content_evidence: None,
+                identity_resolution: None,
                 hash: None,
                 rename_plan: None,
             }],
